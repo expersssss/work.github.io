@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    >
+
+    <title>Работа</title>
+
+    <link
+        rel="stylesheet"
+        href="/style.css"
+    >
+
+    <script
+        src="https://telegram.org/js/telegram-web-app.js"
+    ></script>
+</head>
+
+<body>
+
+<div id="app">
+
+    <!-- HEADER -->
+
+    <header class="header">
+
+        <div>
+            <div class="logo">
+                💼 Работа
+            </div>
+
+            <div
+                class="subtitle"
+                id="hello"
+            >
+                Поиск работы
+            </div>
+        </div>
+
+        <button
+            class="icon-button"
+            onclick="openProfile()"
+        >
+            👤
+        </button>
+
+    </header>
+
+
+    <!-- SEARCH -->
+
+    <section class="search-section">
+
+        <div class="search-box">
+
+            <span>🔎</span>
+
+            <input
+                id="searchInput"
+                type="text"
+                placeholder="Должность, категория..."
+                autocomplete="off"
+            >
+
+            <button
+                id="clearSearch"
+                onclick="clearSearch()"
+            >
+                ✕
+            </button>
+
+        </div>
+
+    </section>
+
+
+    <!-- CATEGORIES -->
+
+    <section>
+
+        <div class="section-title">
+            Категории
+        </div>
+
+        <div
+            class="categories"
+            id="categories"
+        >
+            <button
+                class="category active"
+                onclick="selectCategory('')"
+            >
+                Все
+            </button>
+        </div>
+
+    </section>
+
+
+    <!-- CONTENT -->
+
+    <main id="content">
+
+        <div class="loading">
+            Загрузка...
+        </div>
+
+    </main>
+
+
+    <!-- BOTTOM NAVIGATION -->
+
+    <nav class="bottom-nav">
+
+        <button
+            class="nav-item active"
+            onclick="showHome()"
+        >
+            <span>🏠</span>
+            <small>Главная</small>
+        </button>
+
+        <button
+            class="nav-item"
+            onclick="showFavorites()"
+        >
+            <span>❤️</span>
+            <small>Избранное</small>
+        </button>
+
+        <button
+            class="nav-item"
+            onclick="showApplications()"
+        >
+            <span>📩</span>
+            <small>Отклики</small>
+        </button>
+
+        <button
+            class="nav-item"
+            onclick="openProfile()"
+        >
+            <span>👤</span>
+            <small>Профиль</small>
+        </button>
+
+    </nav>
+
+</div>
+
+
+<!-- VACANCY MODAL -->
+
+<div
+    class="modal hidden"
+    id="vacancyModal"
+>
+
+    <div class="modal-content">
+
+        <button
+            class="modal-close"
+            onclick="closeModal()"
+        >
+            ✕
+        </button>
+
+        <div id="vacancyContent"></div>
+
+    </div>
+
+</div>
+
+
+<!-- APPLICATION MODAL -->
+
+<div
+    class="modal hidden"
+    id="applicationModal"
+>
+
+    <div class="modal-content">
+
+        <button
+            class="modal-close"
+            onclick="closeApplication()"
+        >
+            ✕
+        </button>
+
+        <h2>
+            📩 Отклик
+        </h2>
+
+        <div class="form-group">
+
+            <label>
+                Возраст
+            </label>
+
+            <input
+                id="applyAge"
+                type="number"
+                min="14"
+                max="50"
+                placeholder="Ваш возраст"
+            >
+
+        </div>
+
+        <div class="form-group">
+
+            <label>
+                Город
+            </label>
+
+            <input
+                id="applyCity"
+                type="text"
+                placeholder="Ваш город"
+            >
+
+        </div>
+
+        <div class="form-group">
+
+            <label>
+                Контакт
+            </label>
+
+            <input
+                id="applyContact"
+                type="text"
+                placeholder="@username или телефон"
+            >
+
+        </div>
+
+        <div class="form-group">
+
+            <label>
+                О себе
+            </label>
+
+            <textarea
+                id="applyMessage"
+                maxlength="1000"
+                placeholder="Опыт, навыки, когда готовы начать..."
+            ></textarea>
+
+        </div>
+
+        <button
+            class="primary-button"
+            onclick="sendApplication()"
+        >
+            📩 Отправить отклик
+        </button>
+
+    </div>
+
+</div>
+
+
+<!-- PROFILE MODAL -->
+
+<div
+    class="modal hidden"
+    id="profileModal"
+>
+
+    <div class="modal-content">
+
+        <button
+            class="modal-close"
+            onclick="closeProfile()"
+        >
+            ✕
+        </button>
+
+        <h2>
+            👤 Профиль
+        </h2>
+
+        <div id="profileContent"></div>
+
+    </div>
+
+</div>
+
+
+<!-- ADMIN MODAL -->
+
+<div
+    class="modal hidden"
+    id="adminModal"
+>
+
+    <div class="modal-content admin-modal">
+
+        <button
+            class="modal-close"
+            onclick="closeAdmin()"
+        >
+            ✕
+        </button>
+
+        <h2>
+            ⚙️ Админ-панель
+        </h2>
+
+        <div id="adminContent"></div>
+
+    </div>
+
+</div>
+
+
+<script src="/app.js"></script>
+
+</body>
+</html>
