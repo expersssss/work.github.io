@@ -1,1562 +1,1176 @@
+```javascript
 const tg = window.Telegram?.WebApp;
 
 if (tg) {
-tg.ready();
-tg.expand();
+    tg.ready();
+    tg.expand();
+    tg.enableClosingConfirmation?.();
 }
 
-// ============================================================
-// STATE
-// ============================================================
+const API_URL = "https://work-bot-h1go.onrender.com";
 
 let currentUser = null;
-let isAdmin = false;
-
 let currentCategory = "";
 let currentSearch = "";
-let currentCity = "";
-
-let vacancies = [];
+let currentVacancyId = null;
 let categories = [];
 
-let currentVacancy = null;
-
-// ============================================================
-// API
-// ============================================================
-
-async function api(url, options = {}) {
-
-```
-const headers = {
-    "Content-Type": "application/json",
-    ...(options.headers || {})
-};
-
-// Telegram Mini App authentication
-if (tg && tg.initData) {
-    headers["X-Telegram-Init-Data"] = tg.initData;
+function initData() {
+    return tg?.initData || "";
 }
 
-const response = await fetch(url, {
-    ...options,
-    headers
-});
+async function api(path, options = {}) {
+    const headers = {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": initData(),
+        ...(options.headers || {})
+    };
 
-let data;
+    const response = await fetch(`${API_URL}${path}`, {
+        ...options,
+        headers
+    });
 
-try {
-    data = await response.json();
-} catch {
-    throw new Error("Сервер вернул некорректный ответ");
+    let data;
+
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error(`Ошибка сервера: ${response.status}`);
+    }
+
+    if (!response.ok || data.ok === false) {
+        throw new Error(data.error || "Произошла ошибка");
+    }
+
+    return data;
 }
 
-if (!response.ok || data.ok === false) {
-    throw new Error(
-        data.error || `Ошибка сервера: ${response.status}`
-    );
+function escapeHtml(value) {
+    if (value === null || value === undefined) return "";
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
-return data;
-```
+function showToast(message) {
+    let toast = document.getElementById("toast");
 
+    if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "toast";
+        toast.className = "toast";
+        document.body.appendChild(toast);
+    }
+
+    toast.textContent = message;
+    toast.classList.add("show");
+
+    clearTimeout(window.toastTimer);
+
+    window.toastTimer = setTimeout(() => {
+        toast.classList.remove("show");
+    }, 2500);
 }
 
-// ============================================================
-// INIT
-// ============================================================
-
-document.addEventListener("DOMContentLoaded", async () => {
-
-```
-setupSearch();
-
-await loadUser();
-await loadCategories();
-await loadVacancies();
-
-if (tg) {
-    tg.onEvent("themeChanged", applyTelegramTheme);
-    applyTelegramTheme();
+function setActiveNav(index) {
+    document.querySelectorAll(".nav-item").forEach((item, i) => {
+        item.classList.toggle("active", i === index);
+    });
 }
-```
 
-});
+function setLoading(text = "Загрузка...") {
+    document.getElementById("content").innerHTML = `
+        <div class="loading">
+            <div class="spinner"></div>
+            <div>${escapeHtml(text)}</div>
+        </div>
+    `;
+}
 
-// ============================================================
-// USER
-// ============================================================
+function setError(text) {
+    document.getElementById("content").innerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">⚠️</div>
+            <h3>Не удалось загрузить</h3>
+            <p>${escapeHtml(text)}</p>
+            <button class="primary-button small" onclick="showHome()">
+                Повторить
+            </button>
+        </div>
+    `;
+}
 
 async function loadUser() {
-
-```
-try {
-
     const data = await api("/api/me");
 
     currentUser = data.user;
-    isAdmin = Boolean(data.is_admin);
 
-    updateHello();
+    const hello = document.getElementById("hello");
 
-} catch (error) {
+    if (hello) {
+        const name = currentUser?.first_name || "Поиск работы";
+        hello.textContent = name === "Поиск работы"
+            ? name
+            : `Привет, ${name}!`;
+    }
 
-    console.error(error);
-
-    showError(
-        "Не удалось загрузить профиль.\n" +
-        "Откройте приложение именно через Telegram."
-    );
+    return data;
 }
-```
-
-}
-
-function updateHello() {
-
-```
-const hello = document.getElementById("hello");
-
-if (!hello) return;
-
-if (currentUser?.first_name) {
-    hello.textContent =
-        `Привет, ${currentUser.first_name}!`;
-} else {
-    hello.textContent =
-        "Поиск работы";
-}
-```
-
-}
-
-// ============================================================
-// CATEGORIES
-// ============================================================
 
 async function loadCategories() {
-
-```
-try {
-
     const data = await api("/api/categories");
 
     categories = data.categories || [];
 
-    renderCategories();
+    const container = document.getElementById("categories");
 
-} catch (error) {
-
-    console.error(error);
-}
-```
-
-}
-
-function renderCategories() {
-
-```
-const container =
-    document.getElementById("categories");
-
-if (!container) return;
-
-container.innerHTML = "";
-
-const allButton = document.createElement("button");
-
-allButton.className =
-    "category" +
-    (currentCategory === "" ? " active" : "");
-
-allButton.textContent = "Все";
-
-allButton.onclick = () => {
-    selectCategory("");
-};
-
-container.appendChild(allButton);
-
-
-categories.forEach(category => {
-
-    const button =
-        document.createElement("button");
-
-    button.className =
-        "category" +
-        (
-            currentCategory === category.name
-                ? " active"
-                : ""
-        );
-
-    button.innerHTML =
-        `${escapeHtml(category.name)}
-         <span>${category.count}</span>`;
-
-    button.onclick = () => {
-        selectCategory(category.name);
-    };
-
-    container.appendChild(button);
-});
-```
-
-}
-
-function selectCategory(category) {
-
-```
-currentCategory = category;
-
-renderCategories();
-loadVacancies();
-```
-
-}
-
-// ============================================================
-// VACANCIES
-// ============================================================
-
-async function loadVacancies() {
-
-```
-showLoading();
-
-try {
-
-    const params = new URLSearchParams();
-
-    if (currentSearch) {
-        params.set(
-            "search",
-            currentSearch
-        );
-    }
-
-    if (currentCategory) {
-        params.set(
-            "category",
-            currentCategory
-        );
-    }
-
-    if (currentCity) {
-        params.set(
-            "city",
-            currentCity
-        );
-    }
-
-    const query =
-        params.toString()
-            ? `?${params.toString()}`
-            : "";
-
-    const data =
-        await api(
-            `/api/vacancies${query}`
-        );
-
-    vacancies =
-        data.vacancies || [];
-
-    renderVacancies();
-
-} catch (error) {
-
-    console.error(error);
-
-    showError(
-        error.message ||
-        "Не удалось загрузить вакансии"
-    );
-}
-```
-
-}
-
-function renderVacancies() {
-
-```
-const content =
-    document.getElementById("content");
-
-if (!content) return;
-
-if (!vacancies.length) {
-
-    content.innerHTML = `
-        <div class="empty-state">
-            <div class="empty-icon">📭</div>
-            <h3>Вакансий не найдено</h3>
-            <p>
-                Попробуйте изменить поиск
-                или выбрать другую категорию.
-            </p>
-        </div>
+    container.innerHTML = `
+        <button
+            class="category ${currentCategory === "" ? "active" : ""}"
+            onclick="selectCategory('')"
+        >
+            Все
+        </button>
     `;
 
-    return;
+    categories.forEach(category => {
+        container.innerHTML += `
+            <button
+                class="category ${currentCategory === category.name ? "active" : ""}"
+                onclick="selectCategory(${JSON.stringify(category.name)})"
+            >
+                ${escapeHtml(category.name)}
+                <span class="category-count">${category.count}</span>
+            </button>
+        `;
+    });
 }
 
-content.innerHTML = `
-    <div class="results-header">
-        <span>Найдено вакансий</span>
-        <b>${vacancies.length}</b>
-    </div>
+async function loadVacancies() {
+    setLoading();
 
-    <div class="vacancies-list">
-        ${vacancies
-            .map(renderVacancyCard)
-            .join("")}
-    </div>
-`;
-```
+    try {
+        const params = new URLSearchParams();
 
+        if (currentSearch) {
+            params.set("search", currentSearch);
+        }
+
+        if (currentCategory) {
+            params.set("category", currentCategory);
+        }
+
+        const data = await api(
+            `/api/vacancies?${params.toString()}`
+        );
+
+        renderVacancies(data.vacancies || []);
+
+    } catch (error) {
+        console.error(error);
+        setError(error.message);
+    }
+}
+
+function renderVacancies(vacancies) {
+    const content = document.getElementById("content");
+
+    if (!vacancies.length) {
+        content.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🔎</div>
+                <h3>Вакансий не найдено</h3>
+                <p>
+                    Попробуйте изменить поиск или выбрать другую категорию.
+                </p>
+            </div>
+        `;
+        return;
+    }
+
+    content.innerHTML = `
+        <div class="results-header">
+            <span>Найдено вакансий: <b>${vacancies.length}</b></span>
+        </div>
+
+        <div class="vacancy-list">
+            ${vacancies.map(renderVacancyCard).join("")}
+        </div>
+    `;
 }
 
 function renderVacancyCard(vacancy) {
+    const favorite = vacancy.favorite;
 
-```
-const favoriteClass =
-    vacancy.favorite
-        ? "favorite active"
-        : "favorite";
+    return `
+        <article class="vacancy-card">
+            <div class="vacancy-top">
+                <div class="vacancy-icon">
+                    ${getCategoryIcon(vacancy.category)}
+                </div>
 
-const favoriteIcon =
-    vacancy.favorite
-        ? "❤️"
-        : "♡";
-
-return `
-    <article
-        class="vacancy-card"
-        onclick="openVacancy(${vacancy.id})"
-    >
-
-        <div class="vacancy-top">
-
-            <div class="vacancy-icon">
-                💼
+                <button
+                    class="favorite-button ${favorite ? "favorite-active" : ""}"
+                    onclick="toggleFavorite(event, ${vacancy.id})"
+                    title="Избранное"
+                >
+                    ${favorite ? "❤️" : "♡"}
+                </button>
             </div>
 
-            <button
-                class="${favoriteClass}"
-                onclick="
-                    event.stopPropagation();
-                    toggleFavorite(${vacancy.id});
-                "
+            <div
+                class="vacancy-main"
+                onclick="openVacancy(${vacancy.id})"
             >
-                ${favoriteIcon}
-            </button>
+                <h3>${escapeHtml(vacancy.title)}</h3>
 
-        </div>
-
-        <h3>
-            ${escapeHtml(
-                vacancy.title || "Без названия"
-            )}
-        </h3>
-
-        <div class="vacancy-meta">
-
-            ${
-                vacancy.category
-                ? `
-                <span class="tag">
-                    📂
-                    ${escapeHtml(
+                <div class="vacancy-meta">
+                    ${
                         vacancy.category
-                    )}
-                </span>
-                `
-                : ""
-            }
+                            ? `<span>📂 ${escapeHtml(vacancy.category)}</span>`
+                            : ""
+                    }
 
-            ${
-                vacancy.salary
-                ? `
-                <span class="salary">
-                    💰
-                    ${escapeHtml(
+                    ${
                         vacancy.salary
-                    )}
-                </span>
-                `
-                : ""
-            }
+                            ? `<span>💰 ${escapeHtml(vacancy.salary)}</span>`
+                            : ""
+                    }
+                </div>
 
-        </div>
+                ${
+                    vacancy.description
+                        ? `
+                            <p class="vacancy-description">
+                                ${escapeHtml(
+                                    truncate(vacancy.description, 160)
+                                )}
+                            </p>
+                        `
+                        : ""
+                }
 
-        ${
-            vacancy.description
-            ? `
-            <p class="vacancy-description">
-                ${escapeHtml(
-                    truncate(
-                        vacancy.description,
-                        150
-                    )
-                )}
-            </p>
-            `
-            : ""
-        }
-
-        <div class="vacancy-footer">
-            <span>
-                Подробнее →
-            </span>
-        </div>
-
-    </article>
-`;
-```
-
+                <div class="vacancy-footer">
+                    <span>Подробнее →</span>
+                </div>
+            </div>
+        </article>
+    `;
 }
 
-// ============================================================
-// VACANCY DETAILS
-// ============================================================
+function getCategoryIcon(category) {
+    const value = String(category || "").toLowerCase();
 
-async function openVacancy(id) {
+    if (value.includes("водител")) return "🚗";
+    if (value.includes("курьер")) return "🛵";
+    if (value.includes("логист")) return "📦";
+    if (value.includes("спорт")) return "🏆";
+    if (value.includes("стро")) return "🔨";
+    if (value.includes("продаж")) return "💼";
+    if (value.includes("магаз")) return "🛒";
+    if (value.includes("ресторан")) return "🍽️";
+    if (value.includes("офис")) return "💻";
 
-```
-try {
+    return "💼";
+}
 
-    const data =
-        await api(
-            `/api/vacancy/${id}`
-        );
+function truncate(text, maxLength) {
+    text = String(text || "");
 
-    currentVacancy =
-        data.vacancy;
+    if (text.length <= maxLength) {
+        return text;
+    }
 
-    const modal =
-        document.getElementById(
-            "vacancyModal"
-        );
+    return text.slice(0, maxLength) + "…";
+}
 
-    const content =
-        document.getElementById(
-            "vacancyContent"
-        );
+function selectCategory(category) {
+    currentCategory = category;
+
+    document.querySelectorAll(".category").forEach(button => {
+        button.classList.remove("active");
+    });
+
+    loadCategories().catch(console.error);
+    loadVacancies();
+}
+
+function clearSearch() {
+    const input = document.getElementById("searchInput");
+
+    input.value = "";
+    currentSearch = "";
+
+    loadVacancies();
+}
+
+let searchTimer = null;
+
+function setupSearch() {
+    const input = document.getElementById("searchInput");
+
+    if (!input) return;
+
+    input.addEventListener("input", () => {
+        clearTimeout(searchTimer);
+
+        searchTimer = setTimeout(() => {
+            currentSearch = input.value.trim();
+            loadVacancies();
+        }, 350);
+    });
+}
+
+async function openVacancy(vacancyId) {
+    currentVacancyId = vacancyId;
+
+    try {
+        const data = await api(`/api/vacancy/${vacancyId}`);
+        renderVacancyModal(data.vacancy);
+
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+function renderVacancyModal(vacancy) {
+    const modal = document.getElementById("vacancyModal");
+    const content = document.getElementById("vacancyContent");
 
     content.innerHTML = `
         <div class="vacancy-detail">
-
             <div class="detail-icon">
-                💼
+                ${getCategoryIcon(vacancy.category)}
             </div>
 
-            <h2>
-                ${escapeHtml(
-                    currentVacancy.title
-                )}
-            </h2>
+            <h2>${escapeHtml(vacancy.title)}</h2>
+
+            <div class="detail-tags">
+                ${
+                    vacancy.category
+                        ? `<span>📂 ${escapeHtml(vacancy.category)}</span>`
+                        : ""
+                }
+
+                ${
+                    vacancy.salary
+                        ? `<span>💰 ${escapeHtml(vacancy.salary)}</span>`
+                        : ""
+                }
+            </div>
+
+            <section class="detail-section">
+                <h3>📝 Описание</h3>
+                <p>${escapeHtml(
+                    vacancy.description || "Описание не указано."
+                )}</p>
+            </section>
+
+            <section class="detail-section">
+                <h3>📌 Требования</h3>
+                <p>${escapeHtml(
+                    vacancy.requirements || "Требования не указаны."
+                )}</p>
+            </section>
 
             ${
-                currentVacancy.category
-                ? `
-                <div class="detail-row">
-                    <span>Категория</span>
-                    <b>
-                        ${escapeHtml(
-                            currentVacancy.category
-                        )}
-                    </b>
-                </div>
-                `
-                : ""
-            }
-
-            ${
-                currentVacancy.salary
-                ? `
-                <div class="detail-row">
-                    <span>Оплата</span>
-                    <b class="detail-salary">
-                        ${escapeHtml(
-                            currentVacancy.salary
-                        )}
-                    </b>
-                </div>
-                `
-                : ""
-            }
-
-            ${
-                currentVacancy.description
-                ? `
-                <div class="detail-section">
-                    <h4>📝 Описание</h4>
-                    <p>
-                        ${nl2br(
-                            escapeHtml(
-                                currentVacancy.description
-                            )
-                        )}
-                    </p>
-                </div>
-                `
-                : ""
-            }
-
-            ${
-                currentVacancy.requirements
-                ? `
-                <div class="detail-section">
-                    <h4>📌 Требования</h4>
-                    <p>
-                        ${nl2br(
-                            escapeHtml(
-                                currentVacancy.requirements
-                            )
-                        )}
-                    </p>
-                </div>
-                `
-                : ""
+                vacancy.contact
+                    ? `
+                        <section class="detail-section">
+                            <h3>📞 Контакт</h3>
+                            <p>${escapeHtml(vacancy.contact)}</p>
+                        </section>
+                    `
+                    : ""
             }
 
             <button
                 class="primary-button"
-                onclick="openApplication()"
+                onclick="openApplication(${vacancy.id})"
             >
                 📩 Откликнуться
             </button>
 
             <button
                 class="secondary-button"
-                onclick="
-                    toggleFavorite(
-                        ${currentVacancy.id}
-                    )
-                "
+                onclick="toggleFavoriteFromModal(${vacancy.id})"
             >
-                ${
-                    currentVacancy.favorite
-                        ? "❤️ Убрать из избранного"
-                        : "♡ Добавить в избранное"
-                }
+                ${vacancy.favorite ? "❤️ Убрать из избранного" : "♡ Добавить в избранное"}
             </button>
-
         </div>
     `;
 
     modal.classList.remove("hidden");
 
-    if (tg?.BackButton) {
+    if (tg) {
         tg.BackButton.show();
         tg.BackButton.onClick(closeModal);
     }
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Ошибка загрузки вакансии"
-    );
-}
-```
-
 }
 
 function closeModal() {
+    document.getElementById("vacancyModal").classList.add("hidden");
 
-```
-const modal =
-    document.getElementById(
-        "vacancyModal"
-    );
-
-modal?.classList.add("hidden");
-
-currentVacancy = null;
-
-if (tg?.BackButton) {
-    tg.BackButton.hide();
-}
-```
-
-}
-
-// ============================================================
-// FAVORITES
-// ============================================================
-
-async function toggleFavorite(vacancyId) {
-
-```
-try {
-
-    const data =
-        await api(
-            "/api/favorite",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    vacancy_id: vacancyId
-                })
-            }
-        );
-
-    const vacancy =
-        vacancies.find(
-            item =>
-                item.id === vacancyId
-        );
-
-    if (vacancy) {
-        vacancy.favorite =
-            data.favorite;
-    }
-
-    if (
-        currentVacancy &&
-        currentVacancy.id === vacancyId
-    ) {
-        currentVacancy.favorite =
-            data.favorite;
-    }
-
-    renderVacancies();
-
-    if (
-        currentVacancy &&
-        currentVacancy.id === vacancyId
-    ) {
-        openVacancy(vacancyId);
-    }
-
-    showToast(
-        data.favorite
-            ? "Добавлено в избранное ❤️"
-            : "Удалено из избранного"
-    );
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Не удалось изменить избранное"
-    );
-}
-```
-
-}
-
-async function showFavorites() {
-
-```
-setActiveNav(1);
-
-showLoading();
-
-try {
-
-    const data =
-        await api(
-            "/api/favorites"
-        );
-
-    const list =
-        data.vacancies || [];
-
-    renderVacancyCollection(
-        list,
-        "❤️ Избранное",
-        "В избранном пока ничего нет."
-    );
-
-} catch (error) {
-
-    showError(error.message);
-}
-```
-
-}
-
-// ============================================================
-// APPLICATION
-// ============================================================
-
-function openApplication() {
-
-```
-if (!currentVacancy) {
-    showToast("Вакансия не выбрана");
-    return;
-}
-
-closeModal();
-
-const modal =
-    document.getElementById(
-        "applicationModal"
-    );
-
-modal.classList.remove("hidden");
-
-if (currentUser) {
-
-    const age =
-        document.getElementById(
-            "applyAge"
-        );
-
-    const city =
-        document.getElementById(
-            "applyCity"
-        );
-
-    if (
-        age &&
-        currentUser.age
-    ) {
-        age.value =
-            currentUser.age;
-    }
-
-    if (
-        city &&
-        currentUser.city
-    ) {
-        city.value =
-            currentUser.city;
+    if (tg) {
+        tg.BackButton.hide();
     }
 }
-```
 
+async function toggleFavorite(event, vacancyId) {
+    if (event) {
+        event.stopPropagation();
+    }
+
+    try {
+        const data = await api("/api/favorite", {
+            method: "POST",
+            body: JSON.stringify({
+                vacancy_id: vacancyId
+            })
+        });
+
+        showToast(
+            data.favorite
+                ? "❤️ Добавлено в избранное"
+                : "Удалено из избранного"
+        );
+
+        await loadVacancies();
+
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+async function toggleFavoriteFromModal(vacancyId) {
+    try {
+        const data = await api("/api/favorite", {
+            method: "POST",
+            body: JSON.stringify({
+                vacancy_id: vacancyId
+            })
+        });
+
+        showToast(
+            data.favorite
+                ? "❤️ Добавлено в избранное"
+                : "Удалено из избранного"
+        );
+
+        await openVacancy(vacancyId);
+
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+function openApplication(vacancyId) {
+    currentVacancyId = vacancyId;
+
+    document.getElementById("applicationModal")
+        .classList.remove("hidden");
+
+    if (currentUser) {
+        document.getElementById("applyAge").value =
+            currentUser.age || "";
+
+        document.getElementById("applyCity").value =
+            currentUser.city || "";
+
+        if (currentUser.username) {
+            document.getElementById("applyContact").value =
+                "@" + currentUser.username.replace("@", "");
+        }
+    }
+
+    closeModal();
 }
 
 function closeApplication() {
-
-```
-document
-    .getElementById(
-        "applicationModal"
-    )
-    ?.classList.add("hidden");
-```
-
+    document.getElementById("applicationModal")
+        .classList.add("hidden");
 }
 
 async function sendApplication() {
+    if (!currentVacancyId) {
+        showToast("Вакансия не выбрана");
+        return;
+    }
 
-```
-if (!currentVacancy) {
-    showToast("Вакансия не выбрана");
-    return;
-}
-
-const age =
-    document.getElementById(
-        "applyAge"
-    ).value;
-
-const city =
-    document.getElementById(
-        "applyCity"
-    ).value.trim();
-
-const contact =
-    document.getElementById(
-        "applyContact"
-    ).value.trim();
-
-const message =
-    document.getElementById(
-        "applyMessage"
-    ).value.trim();
-
-
-if (!age) {
-    showToast("Укажите возраст");
-    return;
-}
-
-if (!city) {
-    showToast("Укажите город");
-    return;
-}
-
-if (!contact) {
-    showToast("Укажите контакт");
-    return;
-}
-
-if (message.length < 5) {
-    showToast(
-        "Расскажите немного о себе"
+    const age = Number(
+        document.getElementById("applyAge").value
     );
-    return;
-}
 
+    const city = document.getElementById("applyCity").value.trim();
 
-const button =
-    document.querySelector(
+    const contact = document
+        .getElementById("applyContact")
+        .value.trim();
+
+    const message = document
+        .getElementById("applyMessage")
+        .value.trim();
+
+    if (!age) {
+        showToast("Укажите возраст");
+        return;
+    }
+
+    if (!city) {
+        showToast("Укажите город");
+        return;
+    }
+
+    if (!contact) {
+        showToast("Укажите контакт");
+        return;
+    }
+
+    if (!message) {
+        showToast("Расскажите немного о себе");
+        return;
+    }
+
+    const button = document.querySelector(
         "#applicationModal .primary-button"
     );
 
-if (button) {
     button.disabled = true;
-    button.textContent =
-        "Отправляем...";
-}
+    button.textContent = "Отправка...";
 
+    try {
+        const data = await api("/api/apply", {
+            method: "POST",
+            body: JSON.stringify({
+                vacancy_id: currentVacancyId,
+                age,
+                city,
+                contact,
+                message
+            })
+        });
 
-try {
-
-    const data =
-        await api(
-            "/api/apply",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    vacancy_id:
-                        currentVacancy.id,
-                    age: Number(age),
-                    city,
-                    contact,
-                    message
-                })
-            }
+        showToast(
+            `Отклик №${data.application_id} отправлен!`
         );
 
-    showToast(
-        `Отклик отправлен! №${data.application_id}`
-    );
+        document.getElementById("applyMessage").value = "";
 
-    closeApplication();
+        closeApplication();
 
-    document.getElementById(
-        "applyMessage"
-    ).value = "";
+    } catch (error) {
+        showToast(error.message);
 
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Не удалось отправить отклик"
-    );
-
-} finally {
-
-    if (button) {
+    } finally {
         button.disabled = false;
-        button.textContent =
-            "📩 Отправить отклик";
+        button.textContent = "📩 Отправить отклик";
     }
 }
-```
 
+async function showHome() {
+    setActiveNav(0);
+
+    document.getElementById("content").scrollTop = 0;
+
+    await loadVacancies();
 }
 
-// ============================================================
-// MY APPLICATIONS
-// ============================================================
+async function showFavorites() {
+    setActiveNav(1);
+    setLoading("Загрузка избранного...");
 
-async function showApplications() {
+    try {
+        const data = await api("/api/favorites");
 
-```
-setActiveNav(2);
+        const vacancies = data.vacancies || [];
 
-showLoading();
-
-try {
-
-    const data =
-        await api(
-            "/api/my-applications"
-        );
-
-    const applications =
-        data.applications || [];
-
-    renderApplications(
-        applications
-    );
-
-} catch (error) {
-
-    showError(
-        error.message ||
-        "Не удалось загрузить отклики"
-    );
-}
-```
-
-}
-
-function renderApplications(applications) {
-
-```
-const content =
-    document.getElementById(
-        "content"
-    );
-
-if (!applications.length) {
-
-    content.innerHTML = `
-        <div class="empty-state">
-            <div class="empty-icon">📩</div>
-            <h3>Откликов пока нет</h3>
-            <p>
-                Откройте вакансию
-                и отправьте первый отклик.
-            </p>
-        </div>
-    `;
-
-    return;
-}
-
-
-content.innerHTML = `
-    <div class="page-title">
-        📩 Мои отклики
-    </div>
-
-    <div class="applications-list">
-
-        ${applications.map(application => {
-
-            const status =
-                getStatus(application.status);
-
-            return `
-                <div class="application-card">
-
-                    <div class="application-header">
-
-                        <h3>
-                            ${escapeHtml(
-                                application.title ||
-                                "Вакансия"
-                            )}
-                        </h3>
-
-                        <span
-                            class="status ${status.class}"
-                        >
-                            ${status.text}
-                        </span>
-
-                    </div>
-
-                    <div class="application-info">
-
-                        <span>
-                            🏙️
-                            ${escapeHtml(
-                                application.city ||
-                                "—"
-                            )}
-                        </span>
-
-                        <span>
-                            🎂
-                            ${application.age}
-                        </span>
-
-                    </div>
-
-                    ${
-                        application.message
-                        ? `
-                        <p>
-                            ${nl2br(
-                                escapeHtml(
-                                    application.message
-                                )
-                            )}
-                        </p>
-                        `
-                        : ""
-                    }
-
-                    <small>
-                        ${
-                            formatDate(
-                                application.created_at
-                            )
-                        }
-                    </small>
-
+        if (!vacancies.length) {
+            document.getElementById("content").innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">❤️</div>
+                    <h3>Избранное пусто</h3>
+                    <p>
+                        Добавляйте понравившиеся вакансии,
+                        чтобы быстро найти их позже.
+                    </p>
                 </div>
             `;
+            return;
+        }
 
-        }).join("")}
+        renderVacancies(vacancies);
 
-    </div>
-`;
-```
-
+    } catch (error) {
+        setError(error.message);
+    }
 }
 
-// ============================================================
-// PROFILE
-// ============================================================
+async function showApplications() {
+    setActiveNav(2);
+    setLoading("Загрузка откликов...");
+
+    try {
+        const data = await api("/api/my-applications");
+
+        const applications = data.applications || [];
+
+        if (!applications.length) {
+            document.getElementById("content").innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">📩</div>
+                    <h3>Откликов пока нет</h3>
+                    <p>
+                        Здесь будут отображаться вакансии,
+                        на которые вы отправили заявку.
+                    </p>
+                </div>
+            `;
+            return;
+        }
+
+        document.getElementById("content").innerHTML = `
+            <div class="page-heading">
+                <h2>📩 Мои отклики</h2>
+                <p>История отправленных заявок</p>
+            </div>
+
+            <div class="applications-list">
+                ${applications.map(renderApplication).join("")}
+            </div>
+        `;
+
+    } catch (error) {
+        setError(error.message);
+    }
+}
+
+function renderApplication(application) {
+    const status = application.status || "new";
+
+    const statusMap = {
+        new: ["Новый", "status-new"],
+        accepted: ["Принят", "status-accepted"],
+        rejected: ["Отклонён", "status-rejected"],
+        pending: ["На рассмотрении", "status-pending"]
+    };
+
+    const statusInfo =
+        statusMap[status] || ["Новый", "status-new"];
+
+    return `
+        <article class="application-card">
+            <div class="application-header">
+                <div>
+                    <h3>
+                        ${escapeHtml(
+                            application.title || "Вакансия"
+                        )}
+                    </h3>
+
+                    <small>
+                        Отклик №${application.id}
+                    </small>
+                </div>
+
+                <span class="status ${statusInfo[1]}">
+                    ${statusInfo[0]}
+                </span>
+            </div>
+
+            <div class="application-info">
+                <div>
+                    <b>🏙️ Город:</b>
+                    ${escapeHtml(application.city || "—")}
+                </div>
+
+                <div>
+                    <b>🎂 Возраст:</b>
+                    ${escapeHtml(application.age || "—")}
+                </div>
+
+                <div>
+                    <b>📞 Контакт:</b>
+                    ${escapeHtml(application.contact || "—")}
+                </div>
+            </div>
+
+            ${
+                application.message
+                    ? `
+                        <div class="application-message">
+                            ${escapeHtml(application.message)}
+                        </div>
+                    `
+                    : ""
+            }
+        </article>
+    `;
+}
 
 async function openProfile() {
+    try {
+        const data = await api("/api/me");
 
-```
-try {
+        currentUser = data.user;
 
-    const data =
-        await api("/api/me");
+        renderProfile(currentUser, data.is_admin);
 
-    currentUser =
-        data.user;
+        document.getElementById("profileModal")
+            .classList.remove("hidden");
 
-    isAdmin =
-        Boolean(data.is_admin);
-
-    renderProfile();
-
-    document
-        .getElementById(
-            "profileModal"
-        )
-        .classList.remove("hidden");
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Ошибка профиля"
-    );
-}
-```
-
+    } catch (error) {
+        showToast(error.message);
+    }
 }
 
-function renderProfile() {
+function renderProfile(user, isAdmin) {
+    const content = document.getElementById("profileContent");
 
-```
-const content =
-    document.getElementById(
-        "profileContent"
-    );
-
-if (!content) return;
-
-
-content.innerHTML = `
-
-    <div class="profile-avatar">
-        👤
-    </div>
-
-    <div class="profile-name">
-        ${escapeHtml(
-            currentUser?.first_name ||
-            "Пользователь"
-        )}
-    </div>
-
-    ${
-        currentUser?.username
-        ? `
-        <div class="profile-username">
-            @${escapeHtml(
-                currentUser.username
+    content.innerHTML = `
+        <div class="profile-avatar">
+            ${escapeHtml(
+                (user.first_name || "👤").charAt(0).toUpperCase()
             )}
         </div>
-        `
-        : ""
-    }
 
-
-    <div class="profile-form">
-
-        <label>
-            Имя
-        </label>
-
-        <input
-            id="profileName"
-            value="${escapeAttribute(
-                currentUser?.first_name || ""
-            )}"
-            placeholder="Ваше имя"
-        >
-
-
-        <label>
-            Город
-        </label>
-
-        <input
-            id="profileCity"
-            value="${escapeAttribute(
-                currentUser?.city || ""
-            )}"
-            placeholder="Ваш город"
-        >
-
-
-        <label>
-            Возраст
-        </label>
-
-        <input
-            id="profileAge"
-            type="number"
-            min="14"
-            max="50"
-            value="${escapeAttribute(
-                currentUser?.age || ""
-            )}"
-            placeholder="Ваш возраст"
-        >
-
-
-        <label>
-            Username
-        </label>
-
-        <input
-            id="profileUsername"
-            value="${escapeAttribute(
-                currentUser?.username || ""
-            )}"
-            placeholder="@username"
-        >
-
-        <button
-            class="primary-button"
-            onclick="saveProfile()"
-        >
-            💾 Сохранить
-        </button>
-
-    </div>
-
-    ${
-        isAdmin
-        ? `
-        <button
-            class="admin-button"
-            onclick="
-                closeProfile();
-                openAdmin();
-            "
-        >
-            ⚙️ Админ-панель
-        </button>
-        `
-        : ""
-    }
-`;
-```
-
-}
-
-function closeProfile() {
-
-```
-document
-    .getElementById(
-        "profileModal"
-    )
-    ?.classList.add("hidden");
-```
-
-}
-
-async function saveProfile() {
-
-```
-const first_name =
-    document.getElementById(
-        "profileName"
-    ).value.trim();
-
-const city =
-    document.getElementById(
-        "profileCity"
-    ).value.trim();
-
-const age =
-    Number(
-        document.getElementById(
-            "profileAge"
-        ).value
-    );
-
-const username =
-    document.getElementById(
-        "profileUsername"
-    ).value.trim();
-
-
-try {
-
-    const data =
-        await api(
-            "/api/profile",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    first_name,
-                    city,
-                    age,
-                    username
-                })
-            }
-        );
-
-    currentUser =
-        data.user;
-
-    updateHello();
-
-    showToast(
-        "Профиль сохранён ✅"
-    );
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Не удалось сохранить профиль"
-    );
-}
-```
-
-}
-
-// ============================================================
-// ADMIN
-// ============================================================
-
-async function openAdmin() {
-
-```
-if (!isAdmin) {
-    showToast("Нет доступа");
-    return;
-}
-
-document
-    .getElementById(
-        "adminModal"
-    )
-    .classList.remove("hidden");
-
-await loadAdminStats();
-```
-
-}
-
-function closeAdmin() {
-
-```
-document
-    .getElementById(
-        "adminModal"
-    )
-    ?.classList.add("hidden");
-```
-
-}
-
-async function loadAdminStats() {
-
-```
-const content =
-    document.getElementById(
-        "adminContent"
-    );
-
-content.innerHTML = `
-    <div class="loading">
-        Загрузка админ-панели...
-    </div>
-`;
-
-try {
-
-    const data =
-        await api(
-            "/api/admin/stats"
-        );
-
-    const stats =
-        data.stats;
-
-    content.innerHTML = `
-
-        <div class="admin-stats">
-
-            <div class="stat-card">
-                <span>👥</span>
-                <b>${stats.users}</b>
-                <small>Пользователи</small>
-            </div>
-
-            <div class="stat-card">
-                <span>💼</span>
-                <b>${stats.vacancies}</b>
-                <small>Вакансии</small>
-            </div>
-
-            <div class="stat-card">
-                <span>📩</span>
-                <b>${stats.applications}</b>
-                <small>Отклики</small>
-            </div>
-
-        </div>
-
-        <div class="admin-actions">
-
-            <button
-                onclick="adminVacancies()"
-            >
-                💼 Управление вакансиями
-            </button>
-
-            <button
-                onclick="adminApplications()"
-            >
-                📩 Все отклики
-            </button>
-
-            <button
-                onclick="adminCreateVacancy()"
-            >
-                ➕ Добавить вакансию
-            </button>
-
-        </div>
-    `;
-
-} catch (error) {
-
-    showError(
-        error.message ||
-        "Ошибка админ-панели",
-        content
-    );
-}
-```
-
-}
-
-// ============================================================
-// ADMIN VACANCIES
-// ============================================================
-
-async function adminVacancies() {
-
-```
-const content =
-    document.getElementById(
-        "adminContent"
-    );
-
-content.innerHTML =
-    `<div class="loading">Загрузка...</div>`;
-
-try {
-
-    const data =
-        await api(
-            "/api/admin/vacancies"
-        );
-
-    const list =
-        data.vacancies || [];
-
-    content.innerHTML = `
-
-        <div class="admin-page-header">
-
-            <button
-                class="back-button"
-                onclick="loadAdminStats()"
-            >
-                ← Назад
-            </button>
-
-            <h3>
-                💼 Вакансии
-            </h3>
-
-            <button
-                class="small-primary"
-                onclick="adminCreateVacancy()"
-            >
-                + Добавить
-            </button>
-
+        <div class="profile-name">
+            ${escapeHtml(user.first_name || "Пользователь")}
         </div>
 
         ${
-            list.length
-            ? list.map(vacancy => `
-                <div class="admin-vacancy">
-
-                    <div>
-                        <h4>
-                            ${escapeHtml(
-                                vacancy.title
-                            )}
-                        </h4>
-
-                        <span>
-                            ${
-                                vacancy.category ||
-                                "Без категории"
-                            }
-                        </span>
-
-                        <span>
-                            ${
-                                vacancy.active
-                                    ? "🟢 Активна"
-                                    : "🔴 Скрыта"
-                            }
-                        </span>
+            user.username
+                ? `
+                    <div class="profile-username">
+                        @${escapeHtml(
+                            user.username.replace("@", "")
+                        )}
                     </div>
-
-                    <div class="admin-vacancy-buttons">
-
-                        <button
-                            onclick="
-                                adminToggleVacancy(
-                                    ${vacancy.id}
-                                )
-                            "
-                        >
-                            ${
-                                vacancy.active
-                                    ? "Скрыть"
-                                    : "Активировать"
-                            }
-                        </button>
-
-                        <button
-                            class="danger-button"
-                            onclick="
-                                adminDeleteVacancy(
-                                    ${vacancy.id}
-                                )
-                            "
-                        >
-                            🗑
-                        </button>
-
-                    </div>
-
-                </div>
-            `).join("")
-            : `
-                <div class="empty-state">
-                    Вакансий нет.
-                </div>
-            `
+                `
+                : ""
         }
+
+        <div class="profile-form">
+
+            <div class="form-group">
+                <label>Имя</label>
+                <input
+                    id="profileName"
+                    type="text"
+                    value="${escapeHtml(user.first_name || "")}"
+                    placeholder="Ваше имя"
+                >
+            </div>
+
+            <div class="form-group">
+                <label>Город</label>
+                <input
+                    id="profileCity"
+                    type="text"
+                    value="${escapeHtml(user.city || "")}"
+                    placeholder="Ваш город"
+                >
+            </div>
+
+            <div class="form-group">
+                <label>Возраст</label>
+                <input
+                    id="profileAge"
+                    type="number"
+                    min="14"
+                    max="50"
+                    value="${user.age || ""}"
+                    placeholder="Ваш возраст"
+                >
+            </div>
+
+            <div class="form-group">
+                <label>Username</label>
+                <input
+                    id="profileUsername"
+                    type="text"
+                    value="${
+                        user.username
+                            ? "@" + user.username.replace("@", "")
+                            : ""
+                    }"
+                    placeholder="@username"
+                >
+            </div>
+
+            <button
+                class="primary-button"
+                onclick="saveProfile()"
+            >
+                💾 Сохранить профиль
+            </button>
+
+            ${
+                isAdmin
+                    ? `
+                        <button
+                            class="admin-button"
+                            onclick="openAdmin()"
+                        >
+                            ⚙️ Админ-панель
+                        </button>
+                    `
+                    : ""
+            }
+
+        </div>
+    `;
+}
+
+async function saveProfile() {
+    const first_name = document
+        .getElementById("profileName")
+        .value.trim();
+
+    const city = document
+        .getElementById("profileCity")
+        .value.trim();
+
+    const age = Number(
+        document.getElementById("profileAge").value
+    );
+
+    const username = document
+        .getElementById("profileUsername")
+        .value.trim();
+
+    try {
+        const data = await api("/api/profile", {
+            method: "POST",
+            body: JSON.stringify({
+                first_name,
+                city,
+                age,
+                username
+            })
+        });
+
+        currentUser = data.user;
+
+        showToast("Профиль сохранён");
+
+        closeProfile();
+
+        const hello = document.getElementById("hello");
+
+        if (hello && currentUser.first_name) {
+            hello.textContent =
+                `Привет, ${currentUser.first_name}!`;
+        }
+
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+function closeProfile() {
+    document.getElementById("profileModal")
+        .classList.add("hidden");
+}
+
+async function openAdmin() {
+    closeProfile();
+
+    document.getElementById("adminModal")
+        .classList.remove("hidden");
+
+    await loadAdmin();
+}
+
+function closeAdmin() {
+    document.getElementById("adminModal")
+        .classList.add("hidden");
+}
+
+async function loadAdmin() {
+    const content = document.getElementById("adminContent");
+
+    content.innerHTML = `
+        <div class="loading">
+            <div class="spinner"></div>
+            Загрузка админ-панели...
+        </div>
     `;
 
-} catch (error) {
+    try {
+        const stats = await api("/api/admin/stats");
 
-    showToast(
-        error.message ||
-        "Ошибка загрузки вакансий"
-    );
+        content.innerHTML = `
+            <div class="admin-stats">
+
+                <div class="stat-card">
+                    <span>👥</span>
+                    <b>${stats.stats.users}</b>
+                    <small>Пользователи</small>
+                </div>
+
+                <div class="stat-card">
+                    <span>💼</span>
+                    <b>${stats.stats.vacancies}</b>
+                    <small>Вакансии</small>
+                </div>
+
+                <div class="stat-card">
+                    <span>📩</span>
+                    <b>${stats.stats.applications}</b>
+                    <small>Отклики</small>
+                </div>
+
+            </div>
+
+            <div class="admin-actions">
+                <button
+                    class="primary-button"
+                    onclick="showAdminVacancies()"
+                >
+                    💼 Управление вакансиями
+                </button>
+
+                <button
+                    class="secondary-button"
+                    onclick="showAdminApplications()"
+                >
+                    📩 Все отклики
+                </button>
+
+                <button
+                    class="secondary-button"
+                    onclick="showCreateVacancy()"
+                >
+                    ➕ Добавить вакансию
+                </button>
+            </div>
+        `;
+
+    } catch (error) {
+        content.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🔒</div>
+                <h3>Нет доступа</h3>
+                <p>${escapeHtml(error.message)}</p>
+            </div>
+        `;
+    }
 }
-```
 
+async function showAdminVacancies() {
+    const content = document.getElementById("adminContent");
+
+    content.innerHTML = `
+        <div class="admin-loading">
+            Загрузка...
+        </div>
+    `;
+
+    try {
+        const data = await api("/api/admin/vacancies");
+
+        const vacancies = data.vacancies || [];
+
+        content.innerHTML = `
+            <div class="admin-title-row">
+                <h3>💼 Вакансии</h3>
+
+                <button
+                    class="small-button"
+                    onclick="showCreateVacancy()"
+                >
+                    ➕ Добавить
+                </button>
+            </div>
+
+            <div class="admin-vacancies">
+                ${
+                    vacancies.length
+                        ? vacancies.map(renderAdminVacancy).join("")
+                        : `<div class="empty-state">Вакансий нет.</div>`
+                }
+            </div>
+
+            <button
+                class="secondary-button"
+                onclick="loadAdmin()"
+            >
+                ← Назад
+            </button>
+        `;
+
+    } catch (error) {
+        content.innerHTML = `
+            <div class="empty-state">
+                ${escapeHtml(error.message)}
+            </div>
+        `;
+    }
 }
 
-async function adminCreateVacancy() {
+function renderAdminVacancy(vacancy) {
+    return `
+        <div class="admin-vacancy-card">
 
-```
-const content =
-    document.getElementById(
-        "adminContent"
+            <div>
+                <h4>
+                    ${escapeHtml(vacancy.title)}
+                </h4>
+
+                <div class="admin-vacancy-meta">
+                    ${escapeHtml(
+                        vacancy.category || "Без категории"
+                    )}
+
+                    ${
+                        vacancy.salary
+                            ? ` • ${escapeHtml(vacancy.salary)}`
+                            : ""
+                    }
+                </div>
+
+                <span class="${
+                    vacancy.active
+                        ? "active-label"
+                        : "inactive-label"
+                }">
+                    ${vacancy.active ? "Активна" : "Скрыта"}
+                </span>
+            </div>
+
+            <div class="admin-buttons">
+
+                <button
+                    class="small-button"
+                    onclick="toggleAdminVacancy(${vacancy.id})"
+                >
+                    ${vacancy.active ? "Скрыть" : "Активировать"}
+                </button>
+
+                <button
+                    class="danger-button"
+                    onclick="deleteAdminVacancy(${vacancy.id})"
+                >
+                    Удалить
+                </button>
+
+            </div>
+
+        </div>
+    `;
+}
+
+async function toggleAdminVacancy(vacancyId) {
+    try {
+        await api(
+            `/api/admin/vacancy/${vacancyId}/toggle`,
+            {
+                method: "POST"
+            }
+        );
+
+        showToast("Статус вакансии изменён");
+
+        await showAdminVacancies();
+
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+async function deleteAdminVacancy(vacancyId) {
+    const confirmed = confirm(
+        "Удалить эту вакансию?"
     );
 
-content.innerHTML = `
+    if (!confirmed) return;
 
-    <div class="admin-page-header">
+    try {
+        await api(
+            `/api/admin/vacancy/${vacancyId}`,
+            {
+                method: "DELETE"
+            }
+        );
 
-        <button
-            class="back-button"
-            onclick="loadAdminStats()"
-        >
-            ← Назад
-        </button>
+        showToast("Вакансия удалена");
 
-        <h3>
-            ➕ Новая вакансия
-        </h3>
+        await showAdminVacancies();
 
-    </div>
+    } catch (error) {
+        showToast(error.message);
+    }
+}
 
-    <div class="admin-form">
+function showCreateVacancy() {
+    const content = document.getElementById("adminContent");
 
-        <label>
-            Название
-        </label>
+    content.innerHTML = `
+        <div class="admin-title-row">
+            <h3>➕ Новая вакансия</h3>
+        </div>
 
-        <input
-            id="adminTitle"
-            placeholder="Например: Водитель"
-        >
+        <div class="form-group">
+            <label>Название</label>
+            <input
+                id="adminTitle"
+                type="text"
+                placeholder="Например: Водитель"
+            >
+        </div>
 
-        <label>
-            Категория
-        </label>
+        <div class="form-group">
+            <label>Категория</label>
+            <select id="adminCategory">
+                <option value="">Выберите категорию</option>
+                <option value="Водитель">🚗 Водитель</option>
+                <option value="Курьер">🛵 Курьер</option>
+                <option value="Логист">📦 Логист</option>
+                <option value="Спортсмен">🏆 Спортсмен</option>
+                <option value="Продажи">💼 Продажи</option>
+                <option value="Офис">💻 Офис</option>
+                <option value="Другое">📌 Другое</option>
+            </select>
+        </div>
 
-        <input
-            id="adminCategory"
-            placeholder="Водитель, Курьер, Логист..."
-        >
+        <div class="form-group">
+            <label>Зарплата</label>
+            <input
+                id="adminSalary"
+                type="text"
+                placeholder="Например: от 80 000 ₽"
+            >
+        </div>
 
-        <label>
-            Зарплата
-        </label>
+        <div class="form-group">
+            <label>Описание</label>
+            <textarea
+                id="adminDescription"
+                placeholder="Описание работы"
+            ></textarea>
+        </div>
 
-        <input
-            id="adminSalary"
-            placeholder="Например: от 5000 ₽ в день"
-        >
+        <div class="form-group">
+            <label>Требования</label>
+            <textarea
+                id="adminRequirements"
+                placeholder="Требования к кандидату"
+            ></textarea>
+        </div>
 
-        <label>
-            Описание
-        </label>
-
-        <textarea
-            id="adminDescription"
-            placeholder="Опишите суть работы"
-        ></textarea>
-
-        <label>
-            Требования
-        </label>
-
-        <textarea
-            id="adminRequirements"
-            placeholder="Требования к кандидату"
-        ></textarea>
-
-        <label>
-            Контакт
-        </label>
-
-        <input
-            id="adminContact"
-            placeholder="@username или телефон"
-        >
+        <div class="form-group">
+            <label>Контакт</label>
+            <input
+                id="adminContact"
+                type="text"
+                placeholder="@username или другой контакт"
+            >
+        </div>
 
         <button
             class="primary-button"
@@ -1565,58 +1179,47 @@ content.innerHTML = `
             💾 Создать вакансию
         </button>
 
-    </div>
-`;
-```
-
+        <button
+            class="secondary-button"
+            onclick="loadAdmin()"
+        >
+            ← Назад
+        </button>
+    `;
 }
 
 async function createVacancy() {
+    const title = document
+        .getElementById("adminTitle")
+        .value.trim();
 
-```
-const title =
-    document.getElementById(
-        "adminTitle"
-    ).value.trim();
+    const category = document
+        .getElementById("adminCategory")
+        .value.trim();
 
-const category =
-    document.getElementById(
-        "adminCategory"
-    ).value.trim();
+    const salary = document
+        .getElementById("adminSalary")
+        .value.trim();
 
-const salary =
-    document.getElementById(
-        "adminSalary"
-    ).value.trim();
+    const description = document
+        .getElementById("adminDescription")
+        .value.trim();
 
-const description =
-    document.getElementById(
-        "adminDescription"
-    ).value.trim();
+    const requirements = document
+        .getElementById("adminRequirements")
+        .value.trim();
 
-const requirements =
-    document.getElementById(
-        "adminRequirements"
-    ).value.trim();
+    const contact = document
+        .getElementById("adminContact")
+        .value.trim();
 
-const contact =
-    document.getElementById(
-        "adminContact"
-    ).value.trim();
+    if (!title) {
+        showToast("Введите название вакансии");
+        return;
+    }
 
-
-if (title.length < 2) {
-    showToast(
-        "Введите название вакансии"
-    );
-    return;
-}
-
-
-try {
-
-    const data =
-        await api(
+    try {
+        const data = await api(
             "/api/admin/vacancy",
             {
                 method: "POST",
@@ -1631,745 +1234,168 @@ try {
             }
         );
 
-    showToast(
-        `Вакансия №${data.vacancy_id} создана ✅`
-    );
+        showToast(
+            `Вакансия №${data.vacancy_id} создана`
+        );
 
-    await loadCategories();
+        await showAdminVacancies();
 
-    await adminVacancies();
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Не удалось создать вакансию"
-    );
-}
-```
-
+    } catch (error) {
+        showToast(error.message);
+    }
 }
 
-async function adminToggleVacancy(id) {
+async function showAdminApplications() {
+    const content = document.getElementById("adminContent");
 
-```
-try {
+    content.innerHTML = `
+        <div class="admin-loading">
+            Загрузка откликов...
+        </div>
+    `;
 
-    await api(
-        `/api/admin/vacancy/${id}/toggle`,
-        {
-            method: "POST"
-        }
-    );
-
-    await loadCategories();
-    await adminVacancies();
-
-} catch (error) {
-
-    showToast(error.message);
-}
-```
-
-}
-
-async function adminDeleteVacancy(id) {
-
-```
-const confirmed =
-    confirm(
-        "Удалить эту вакансию?"
-    );
-
-if (!confirmed) return;
-
-try {
-
-    await api(
-        `/api/admin/vacancy/${id}`,
-        {
-            method: "DELETE"
-        }
-    );
-
-    await loadCategories();
-    await adminVacancies();
-
-    showToast(
-        "Вакансия удалена"
-    );
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Ошибка удаления"
-    );
-}
-```
-
-}
-
-// ============================================================
-// ADMIN APPLICATIONS
-// ============================================================
-
-async function adminApplications() {
-
-```
-const content =
-    document.getElementById(
-        "adminContent"
-    );
-
-content.innerHTML =
-    `<div class="loading">Загрузка...</div>`;
-
-try {
-
-    const data =
-        await api(
+    try {
+        const data = await api(
             "/api/admin/applications"
         );
 
-    const applications =
-        data.applications || [];
+        const applications =
+            data.applications || [];
 
-    content.innerHTML = `
+        content.innerHTML = `
+            <div class="admin-title-row">
+                <h3>📩 Отклики</h3>
+            </div>
 
-        <div class="admin-page-header">
+            ${
+                applications.length
+                    ? `
+                        <div class="admin-applications">
+                            ${applications
+                                .map(
+                                    renderAdminApplication
+                                )
+                                .join("")}
+                        </div>
+                    `
+                    : `
+                        <div class="empty-state">
+                            Откликов пока нет.
+                        </div>
+                    `
+            }
 
             <button
-                class="back-button"
-                onclick="loadAdminStats()"
+                class="secondary-button"
+                onclick="loadAdmin()"
             >
                 ← Назад
             </button>
+        `;
 
-            <h3>
-                📩 Отклики
-            </h3>
+    } catch (error) {
+        content.innerHTML = `
+            <div class="empty-state">
+                ${escapeHtml(error.message)}
+            </div>
+        `;
+    }
+}
 
-        </div>
+function renderAdminApplication(application) {
+    return `
+        <article class="admin-application-card">
 
-        ${
-            applications.length
-            ? applications.map(app => `
-
-                <div class="admin-application">
-
-                    <div class="application-header">
-
-                        <h4>
-                            ${escapeHtml(
-                                app.title ||
-                                "Вакансия"
-                            )}
-                        </h4>
-
-                        <span class="status new">
-                            ${
-                                escapeHtml(
-                                    app.status ||
-                                    "new"
-                                )
-                            }
-                        </span>
-
-                    </div>
-
-                    <p>
-                        👤
+            <div class="admin-app-header">
+                <div>
+                    <h4>
                         ${escapeHtml(
-                            app.name ||
-                            "—"
+                            application.title || "Вакансия"
                         )}
-                    </p>
-
-                    <p>
-                        🎂
-                        ${app.age || "—"}
-                    </p>
-
-                    <p>
-                        🏙️
-                        ${escapeHtml(
-                            app.city ||
-                            "—"
-                        )}
-                    </p>
-
-                    <p>
-                        📞
-                        ${escapeHtml(
-                            app.contact ||
-                            "—"
-                        )}
-                    </p>
-
-                    <div class="application-message">
-                        📝
-                        ${nl2br(
-                            escapeHtml(
-                                app.message ||
-                                ""
-                            )
-                        )}
-                    </div>
+                    </h4>
 
                     <small>
-                        ${formatDate(
-                            app.created_at
-                        )}
+                        Отклик №${application.id}
                     </small>
-
-                    <div class="telegram-id">
-                        Telegram ID:
-                        ${app.user_id || "—"}
-                    </div>
-
                 </div>
 
-            `).join("")
-            : `
-                <div class="empty-state">
-                    Откликов пока нет.
-                </div>
-            `
-        }
-    `;
-
-} catch (error) {
-
-    showToast(
-        error.message ||
-        "Ошибка загрузки откликов"
-    );
-}
-```
-
-}
-
-// ============================================================
-// HOME
-// ============================================================
-
-function showHome() {
-
-```
-setActiveNav(0);
-
-loadVacancies();
-```
-
-}
-
-function renderVacancyCollection(
-list,
-title,
-emptyText
-) {
-
-```
-const content =
-    document.getElementById(
-        "content"
-    );
-
-if (!list.length) {
-
-    content.innerHTML = `
-        <div class="empty-state">
-
-            <div class="empty-icon">
-                ❤️
+                <span class="status status-new">
+                    ${escapeHtml(
+                        application.status || "new"
+                    )}
+                </span>
             </div>
 
-            <h3>
-                ${escapeHtml(title)}
-            </h3>
+            <div class="admin-app-info">
 
-            <p>
-                ${escapeHtml(emptyText)}
-            </p>
+                <p>
+                    <b>👤 Имя:</b>
+                    ${escapeHtml(application.name || "—")}
+                </p>
 
-        </div>
+                <p>
+                    <b>🎂 Возраст:</b>
+                    ${escapeHtml(application.age || "—")}
+                </p>
+
+                <p>
+                    <b>🏙️ Город:</b>
+                    ${escapeHtml(application.city || "—")}
+                </p>
+
+                <p>
+                    <b>📞 Контакт:</b>
+                    ${escapeHtml(application.contact || "—")}
+                </p>
+
+                <p>
+                    <b>📝 О себе:</b><br>
+                    ${escapeHtml(application.message || "—")}
+                </p>
+
+                <p class="application-date">
+                    ${escapeHtml(
+                        application.created_at || ""
+                    )}
+                </p>
+
+            </div>
+
+        </article>
     `;
-
-    return;
 }
 
-content.innerHTML = `
-
-    <div class="page-title">
-        ${escapeHtml(title)}
-    </div>
-
-    <div class="vacancies-list">
-
-        ${list
-            .map(renderVacancyCard)
-            .join("")}
-
-    </div>
-`;
-```
-
+function setupModalClosing() {
+    document.querySelectorAll(".modal").forEach(modal => {
+        modal.addEventListener("click", event => {
+            if (event.target === modal) {
+                modal.classList.add("hidden");
+            }
+        });
+    });
 }
 
-// ============================================================
-// SEARCH
-// ============================================================
+async function initApp() {
+    setupSearch();
+    setupModalClosing();
 
-function setupSearch() {
+    try {
+        await loadUser();
+        await loadCategories();
+        await loadVacancies();
 
-```
-const input =
-    document.getElementById(
-        "searchInput"
-    );
+    } catch (error) {
+        console.error(error);
 
-if (!input) return;
-
-let timer;
-
-input.addEventListener(
-    "input",
-    event => {
-
-        currentSearch =
-            event.target.value.trim();
-
-        clearTimeout(timer);
-
-        timer = setTimeout(
-            () => loadVacancies(),
-            350
+        setError(
+            "Не удалось подключиться к серверу. " +
+            "Проверьте API_URL в app.js."
         );
     }
-);
-```
-
 }
-
-function clearSearch() {
-
-```
-const input =
-    document.getElementById(
-        "searchInput"
-    );
-
-if (input) {
-    input.value = "";
-}
-
-currentSearch = "";
-
-loadVacancies();
-```
-
-}
-
-// ============================================================
-// NAVIGATION
-// ============================================================
-
-function setActiveNav(index) {
-
-```
-document
-    .querySelectorAll(
-        ".nav-item"
-    )
-    .forEach(
-        (item, i) => {
-            item.classList.toggle(
-                "active",
-                i === index
-            );
-        }
-    );
-```
-
-}
-
-// ============================================================
-// UI
-// ============================================================
-
-function showLoading(
-container = document.getElementById("content")
-) {
-
-```
-if (!container) return;
-
-container.innerHTML = `
-    <div class="loading">
-        <div class="spinner"></div>
-        <span>Загрузка...</span>
-    </div>
-`;
-```
-
-}
-
-function showError(
-message,
-container = document.getElementById("content")
-) {
-
-```
-if (!container) return;
-
-container.innerHTML = `
-    <div class="error-state">
-
-        <div class="error-icon">
-            ⚠️
-        </div>
-
-        <h3>
-            Ошибка
-        </h3>
-
-        <p>
-            ${escapeHtml(
-                message || "Неизвестная ошибка"
-            )}
-        </p>
-
-        <button
-            class="primary-button"
-            onclick="loadVacancies()"
-        >
-            Повторить
-        </button>
-
-    </div>
-`;
-```
-
-}
-
-function showToast(message) {
-
-```
-let toast =
-    document.getElementById(
-        "toast"
-    );
-
-if (!toast) {
-
-    toast =
-        document.createElement(
-            "div"
-        );
-
-    toast.id = "toast";
-    toast.className = "toast";
-
-    document.body.appendChild(
-        toast
-    );
-}
-
-toast.textContent =
-    message;
-
-toast.classList.add(
-    "show"
-);
-
-clearTimeout(
-    toast._timer
-);
-
-toast._timer =
-    setTimeout(
-        () => {
-            toast.classList.remove(
-                "show"
-            );
-        },
-        2800
-    );
-```
-
-}
-
-// ============================================================
-// MODALS
-// ============================================================
 
 document.addEventListener(
-"click",
-event => {
-
-```
-    if (
-        event.target.classList.contains(
-            "modal"
-        )
-    ) {
-
-        event.target.classList.add(
-            "hidden"
-        );
-    }
-}
-```
-
-);
-
-// ============================================================
-// TELEGRAM THEME
-// ============================================================
-
-function applyTelegramTheme() {
-
-```
-if (!tg) return;
-
-const root =
-    document.documentElement;
-
-const theme =
-    tg.themeParams || {};
-
-if (theme.bg_color) {
-    root.style.setProperty(
-        "--tg-bg",
-        theme.bg_color
-    );
-}
-
-if (theme.text_color) {
-    root.style.setProperty(
-        "--tg-text",
-        theme.text_color
-    );
-}
-
-if (theme.hint_color) {
-    root.style.setProperty(
-        "--tg-hint",
-        theme.hint_color
-    );
-}
-
-if (theme.button_color) {
-    root.style.setProperty(
-        "--tg-button",
-        theme.button_color
-    );
-}
-
-if (theme.button_text_color) {
-    root.style.setProperty(
-        "--tg-button-text",
-        theme.button_text_color
-    );
-}
-
-if (theme.secondary_bg_color) {
-    root.style.setProperty(
-        "--tg-secondary",
-        theme.secondary_bg_color
-    );
-}
-```
-
-}
-
-// ============================================================
-// HELPERS
-// ============================================================
-
-function escapeHtml(value) {
-
-```
-return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-```
-
-}
-
-function escapeAttribute(value) {
-
-```
-return escapeHtml(value);
-```
-
-}
-
-function nl2br(value) {
-
-```
-return String(value)
-    .replace(/\n/g, "<br>");
-```
-
-}
-
-function truncate(
-text,
-maxLength
-) {
-
-```
-text = String(text || "");
-
-if (text.length <= maxLength) {
-    return text;
-}
-
-return (
-    text.substring(
-        0,
-        maxLength
-    ) + "..."
+    "DOMContentLoaded",
+    initApp
 );
 ```
-
-}
-
-function formatDate(value) {
-
-```
-if (!value) return "";
-
-const date =
-    new Date(value);
-
-if (Number.isNaN(
-    date.getTime()
-)) {
-    return value;
-}
-
-return date.toLocaleString(
-    "ru-RU",
-    {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit"
-    }
-);
-```
-
-}
-
-function getStatus(status) {
-
-```
-switch (
-    String(status || "").toLowerCase()
-) {
-
-    case "new":
-        return {
-            text: "Новый",
-            class: "new"
-        };
-
-    case "accepted":
-        return {
-            text: "Принят",
-            class: "accepted"
-        };
-
-    case "rejected":
-        return {
-            text: "Отклонён",
-            class: "rejected"
-        };
-
-    default:
-        return {
-            text:
-                status || "На рассмотрении",
-            class: "pending"
-        };
-}
-```
-
-}
-
-// ============================================================
-// GLOBAL EXPORTS
-// ============================================================
-
-window.showHome =
-showHome;
-
-window.showFavorites =
-showFavorites;
-
-window.showApplications =
-showApplications;
-
-window.openProfile =
-openProfile;
-
-window.closeProfile =
-closeProfile;
-
-window.openAdmin =
-openAdmin;
-
-window.closeAdmin =
-closeAdmin;
-
-window.selectCategory =
-selectCategory;
-
-window.clearSearch =
-clearSearch;
-
-window.openVacancy =
-openVacancy;
-
-window.closeModal =
-closeModal;
-
-window.openApplication =
-openApplication;
-
-window.closeApplication =
-closeApplication;
-
-window.sendApplication =
-sendApplication;
-
-window.toggleFavorite =
-toggleFavorite;
-
-window.saveProfile =
-saveProfile;
-
-window.adminVacancies =
-adminVacancies;
-
-window.adminApplications =
-adminApplications;
-
-window.adminCreateVacancy =
-adminCreateVacancy;
-
-window.createVacancy =
-createVacancy;
-
-window.adminToggleVacancy =
-adminToggleVacancy;
-
-window.adminDeleteVacancy =
-adminDeleteVacancy;
