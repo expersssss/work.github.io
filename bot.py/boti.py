@@ -35,27 +35,15 @@ ADMIN_IDS = {
     5662322727,
 }
 
-# !!! НЕ GITHUB !!!
 MINI_APP_URL = os.getenv(
     "MINI_APP_URL",
     "https://work-bot-h1go.onrender.com"
 ).rstrip("/")
 
 HOST = "0.0.0.0"
+PORT = int(os.getenv("PORT", "10000"))
 
-PORT = int(
-    os.getenv("PORT", "10000")
-)
-
-# Папка, где лежит этот файл
 BASE_DIR = Path(__file__).resolve().parent
-
-# Mini App:
-# boti.py
-# web/
-#   index.html
-#   app.js
-#   style.css
 WEB_DIR = BASE_DIR / "web"
 
 DB_NAME = os.getenv(
@@ -64,7 +52,7 @@ DB_NAME = os.getenv(
 )
 
 MIN_AGE = 14
-MAX_AGE = 50
+MAX_AGE = 70
 
 
 # ============================================================
@@ -80,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# ПРОВЕРКА ТОКЕНА
+# TOKEN
 # ============================================================
 
 if not TOKEN:
@@ -160,10 +148,6 @@ def init_db():
             phone TEXT,
             city TEXT,
             age INTEGER,
-            blocked_until TEXT,
-            spam_count INTEGER DEFAULT 0,
-            start_count INTEGER DEFAULT 0,
-            last_start TEXT,
             created_at TEXT
         )
     """)
@@ -177,21 +161,33 @@ def init_db():
             description TEXT,
             requirements TEXT,
             contact TEXT,
+            image_url TEXT,
+            city TEXT,
             employer_id INTEGER,
             created_at TEXT,
             active INTEGER DEFAULT 1
         )
     """)
 
-    if not column_exists("vacancies", "employer_id"):
-        db_execute(
-            "ALTER TABLE vacancies ADD COLUMN employer_id INTEGER"
-        )
+    columns = {
+        "image_url": "TEXT",
+        "city": "TEXT",
+        "employer_id": "INTEGER",
+        "active": "INTEGER DEFAULT 1",
+    }
 
-    if not column_exists("vacancies", "active"):
-        db_execute(
-            "ALTER TABLE vacancies ADD COLUMN active INTEGER DEFAULT 1"
-        )
+    for name, column_type in columns.items():
+
+        if not column_exists(
+            "vacancies",
+            name
+        ):
+            db_execute(
+                f"""
+                ALTER TABLE vacancies
+                ADD COLUMN {name} {column_type}
+                """
+            )
 
     db_execute("""
         CREATE TABLE IF NOT EXISTS applications (
@@ -218,34 +214,35 @@ def init_db():
         )
     """)
 
-    db_execute("""
-        CREATE TABLE IF NOT EXISTS spam_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
-            reason TEXT,
-            created_at TEXT
-        )
-    """)
-
-    db_execute("""
-        CREATE TABLE IF NOT EXISTS broadcasts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT,
-            sent INTEGER DEFAULT 0,
-            failed INTEGER DEFAULT 0,
-            created_at TEXT
-        )
-    """)
-
 
 init_db()
 
 
 # ============================================================
-# USER HELPERS
+# HELPERS
 # ============================================================
 
+def row_to_dict(row):
+
+    if row is None:
+        return None
+
+    return {
+        key: row[key]
+        for key in row.keys()
+    }
+
+
+def rows_to_list(rows):
+
+    return [
+        row_to_dict(row)
+        for row in rows
+    ]
+
+
 def get_user(telegram_id):
+
     return db_fetchone(
         """
         SELECT *
@@ -266,9 +263,27 @@ def create_user_from_telegram(
     existing = get_user(telegram_id)
 
     if existing:
-        return existing
 
-    db_execute("""
+        db_execute(
+            """
+            UPDATE users
+            SET username = ?,
+                first_name = ?,
+                last_name = ?
+            WHERE telegram_id = ?
+            """,
+            (
+                username,
+                first_name,
+                last_name,
+                telegram_id
+            )
+        )
+
+        return get_user(telegram_id)
+
+    db_execute(
+        """
         INSERT INTO users (
             telegram_id,
             username,
@@ -277,18 +292,23 @@ def create_user_from_telegram(
             created_at
         )
         VALUES (?, ?, ?, ?, ?)
-    """, (
-        telegram_id,
-        username,
-        first_name,
-        last_name,
-        datetime.now().isoformat()
-    ))
+        """,
+        (
+            telegram_id,
+            username,
+            first_name,
+            last_name,
+            datetime.now().isoformat()
+        )
+    )
 
     return get_user(telegram_id)
 
 
-def update_user(telegram_id, **kwargs):
+def update_user(
+    telegram_id,
+    **kwargs
+):
 
     if not kwargs:
         return
@@ -316,35 +336,15 @@ def update_user(telegram_id, **kwargs):
     )
 
 
-# ============================================================
-# HELPERS
-# ============================================================
-
-def row_to_dict(row):
-
-    if row is None:
-        return None
-
-    return {
-        key: row[key]
-        for key in row.keys()
-    }
-
-
-def rows_to_list(rows):
-
-    return [
-        row_to_dict(row)
-        for row in rows
-    ]
-
-
 def is_admin(user_id):
 
     return user_id in ADMIN_IDS
 
 
-def json_response(data, status=200):
+def json_response(
+    data,
+    status=200
+):
 
     return web.json_response(
         data,
@@ -360,7 +360,9 @@ def json_response(data, status=200):
 # TELEGRAM MINI APP AUTH
 # ============================================================
 
-def validate_telegram_init_data(init_data):
+def validate_telegram_init_data(
+    init_data
+):
 
     if not init_data:
         return None
@@ -405,12 +407,16 @@ def validate_telegram_init_data(init_data):
         ):
             return None
 
-        user_json = parsed.get("user")
+        user_json = parsed.get(
+            "user"
+        )
 
         if not user_json:
             return None
 
-        return json.loads(user_json)
+        return json.loads(
+            user_json
+        )
 
     except Exception as error:
 
@@ -422,16 +428,16 @@ def validate_telegram_init_data(init_data):
         return None
 
 
-async def get_miniapp_user(request):
+async def get_miniapp_user(
+    request
+):
 
     init_data = request.headers.get(
         "X-Telegram-Init-Data"
     )
 
-    # Дополнительная поддержка:
-    # некоторые клиенты могут передавать initData
-    # через query string.
     if not init_data:
+
         init_data = request.query.get(
             "initData",
             ""
@@ -444,7 +450,9 @@ async def get_miniapp_user(request):
     if not user_data:
         return None
 
-    telegram_id = user_data.get("id")
+    telegram_id = user_data.get(
+        "id"
+    )
 
     if not telegram_id:
         return None
@@ -460,12 +468,14 @@ async def get_miniapp_user(request):
 
 
 # ============================================================
-# API: ME
+# API ME
 # ============================================================
 
 async def api_me(request):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -477,26 +487,30 @@ async def api_me(request):
             401
         )
 
-    db_user = get_user(
-        user["id"]
+    return json_response(
+        {
+            "ok": True,
+            "user": row_to_dict(
+                get_user(
+                    user["id"]
+                )
+            ),
+            "is_admin": is_admin(
+                user["id"]
+            )
+        }
     )
-
-    return json_response({
-        "ok": True,
-        "user": row_to_dict(db_user),
-        "is_admin": is_admin(
-            user["id"]
-        )
-    })
 
 
 # ============================================================
-# API: CATEGORIES
+# API CATEGORIES
 # ============================================================
 
 async def api_categories(request):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -508,7 +522,8 @@ async def api_categories(request):
             401
         )
 
-    rows = db_fetchall("""
+    rows = db_fetchall(
+        """
         SELECT
             category,
             COUNT(*) AS count
@@ -518,30 +533,26 @@ async def api_categories(request):
         AND category != ''
         GROUP BY category
         ORDER BY count DESC
-    """)
+        """
+    )
 
-    categories = []
-
-    for row in rows:
-
-        categories.append({
-            "name": row["category"],
-            "count": row["count"]
-        })
-
-    return json_response({
-        "ok": True,
-        "categories": categories
-    })
+    return json_response(
+        {
+            "ok": True,
+            "categories": rows_to_list(rows)
+        }
+    )
 
 
 # ============================================================
-# API: VACANCIES
+# API VACANCIES
 # ============================================================
 
 async def api_vacancies(request):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -587,16 +598,20 @@ async def api_vacancies(request):
                 OR salary LIKE ?
                 OR description LIKE ?
                 OR requirements LIKE ?
+                OR city LIKE ?
             )
         """
 
-        params.extend([
-            value,
-            value,
-            value,
-            value,
-            value
-        ])
+        params.extend(
+            [
+                value,
+                value,
+                value,
+                value,
+                value,
+                value
+            ]
+        )
 
     if category:
 
@@ -604,25 +619,19 @@ async def api_vacancies(request):
             AND category = ?
         """
 
-        params.append(category)
+        params.append(
+            category
+        )
 
     if city:
 
-        value = f"%{city}%"
-
         query += """
-            AND (
-                title LIKE ?
-                OR description LIKE ?
-                OR requirements LIKE ?
-            )
+            AND city LIKE ?
         """
 
-        params.extend([
-            value,
-            value,
-            value
-        ])
+        params.append(
+            f"%{city}%"
+        )
 
     query += """
         ORDER BY id DESC
@@ -638,7 +647,9 @@ async def api_vacancies(request):
 
     for row in rows:
 
-        item = row_to_dict(row)
+        item = row_to_dict(
+            row
+        )
 
         favorite = db_fetchone(
             """
@@ -657,21 +668,27 @@ async def api_vacancies(request):
             favorite
         )
 
-        result.append(item)
+        result.append(
+            item
+        )
 
-    return json_response({
-        "ok": True,
-        "vacancies": result
-    })
+    return json_response(
+        {
+            "ok": True,
+            "vacancies": result
+        }
+    )
 
 
 # ============================================================
-# API: SINGLE VACANCY
+# SINGLE VACANCY
 # ============================================================
 
 async def api_vacancy(request):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -696,7 +713,7 @@ async def api_vacancy(request):
         return json_response(
             {
                 "ok": False,
-                "error": "Invalid vacancy ID"
+                "error": "Неверный ID"
             },
             400
         )
@@ -742,19 +759,23 @@ async def api_vacancy(request):
         favorite
     )
 
-    return json_response({
-        "ok": True,
-        "vacancy": item
-    })
+    return json_response(
+        {
+            "ok": True,
+            "vacancy": item
+        }
+    )
 
 
 # ============================================================
-# API: FAVORITES
+# FAVORITES
 # ============================================================
 
 async def api_favorites(request):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -766,7 +787,8 @@ async def api_favorites(request):
             401
         )
 
-    rows = db_fetchall("""
+    rows = db_fetchall(
+        """
         SELECT vacancies.*
         FROM vacancies
         INNER JOIN favorites
@@ -774,29 +796,34 @@ async def api_favorites(request):
         WHERE favorites.user_id = ?
         AND vacancies.active = 1
         ORDER BY favorites.id DESC
-    """, (
-        user["id"],
-    ))
+        """,
+        (
+            user["id"],
+        )
+    )
 
-    result = []
+    result = rows_to_list(
+        rows
+    )
 
-    for row in rows:
-
-        item = row_to_dict(row)
-
+    for item in result:
         item["favorite"] = True
 
-        result.append(item)
+    return json_response(
+        {
+            "ok": True,
+            "vacancies": result
+        }
+    )
 
-    return json_response({
-        "ok": True,
-        "vacancies": result
-    })
 
+async def api_favorite_toggle(
+    request
+):
 
-async def api_favorite_toggle(request):
-
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -813,7 +840,9 @@ async def api_favorite_toggle(request):
         data = await request.json()
 
         vacancy_id = int(
-            data.get("vacancy_id")
+            data.get(
+                "vacancy_id"
+            )
         )
 
     except Exception:
@@ -833,7 +862,9 @@ async def api_favorite_toggle(request):
         WHERE id = ?
         AND active = 1
         """,
-        (vacancy_id,)
+        (
+            vacancy_id,
+        )
     )
 
     if not vacancy:
@@ -873,7 +904,7 @@ async def api_favorite_toggle(request):
             )
         )
 
-        is_favorite = False
+        result = False
 
     else:
 
@@ -893,21 +924,25 @@ async def api_favorite_toggle(request):
             )
         )
 
-        is_favorite = True
+        result = True
 
-    return json_response({
-        "ok": True,
-        "favorite": is_favorite
-    })
+    return json_response(
+        {
+            "ok": True,
+            "favorite": result
+        }
+    )
 
 
 # ============================================================
-# API: APPLY
+# APPLY
 # ============================================================
 
 async def api_apply(request):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -932,15 +967,24 @@ async def api_apply(request):
         )
 
         city = str(
-            data.get("city", "")
+            data.get(
+                "city",
+                ""
+            )
         ).strip()
 
         contact = str(
-            data.get("contact", "")
+            data.get(
+                "contact",
+                ""
+            )
         ).strip()
 
         message = str(
-            data.get("message", "")
+            data.get(
+                "message",
+                ""
+            )
         ).strip()
 
     except Exception:
@@ -996,16 +1040,6 @@ async def api_apply(request):
             400
         )
 
-    if len(message) > 1000:
-
-        return json_response(
-            {
-                "ok": False,
-                "error": "Сообщение слишком длинное"
-            },
-            400
-        )
-
     vacancy = db_fetchone(
         """
         SELECT *
@@ -1013,7 +1047,9 @@ async def api_apply(request):
         WHERE id = ?
         AND active = 1
         """,
-        (vacancy_id,)
+        (
+            vacancy_id,
+        )
     )
 
     if not vacancy:
@@ -1030,7 +1066,8 @@ async def api_apply(request):
         user["id"]
     )
 
-    db_execute("""
+    db_execute(
+        """
         INSERT INTO applications (
             vacancy_id,
             user_id,
@@ -1043,16 +1080,18 @@ async def api_apply(request):
             status
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')
-    """, (
-        vacancy_id,
-        user["id"],
-        db_user["first_name"] or user.get("first_name") or "—",
-        age,
-        city,
-        contact,
-        message,
-        datetime.now().isoformat()
-    ))
+        """,
+        (
+            vacancy_id,
+            user["id"],
+            db_user["first_name"] or "—",
+            age,
+            city,
+            contact,
+            message,
+            datetime.now().isoformat()
+        )
+    )
 
     application_id = db.execute(
         "SELECT last_insert_rowid()"
@@ -1062,8 +1101,7 @@ async def api_apply(request):
         "📩 <b>НОВЫЙ ОТКЛИК</b>\n\n"
         f"🆔 Отклик: <code>{application_id}</code>\n"
         f"💼 Вакансия: <b>{vacancy['title']}</b>\n\n"
-        f"👤 Имя: "
-        f"{db_user['first_name'] or '—'}\n"
+        f"👤 Имя: {db_user['first_name'] or '—'}\n"
         f"🎂 Возраст: {age}\n"
         f"🏙️ Город: {city}\n"
         f"📞 Контакт: {contact}\n\n"
@@ -1088,19 +1126,25 @@ async def api_apply(request):
                 error
             )
 
-    return json_response({
-        "ok": True,
-        "application_id": application_id
-    })
+    return json_response(
+        {
+            "ok": True,
+            "application_id": application_id
+        }
+    )
 
 
 # ============================================================
-# API: MY APPLICATIONS
+# MY APPLICATIONS
 # ============================================================
 
-async def api_my_applications(request):
+async def api_my_applications(
+    request
+):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -1112,7 +1156,8 @@ async def api_my_applications(request):
             401
         )
 
-    rows = db_fetchall("""
+    rows = db_fetchall(
+        """
         SELECT
             applications.*,
             vacancies.title
@@ -1121,23 +1166,31 @@ async def api_my_applications(request):
             ON vacancies.id = applications.vacancy_id
         WHERE applications.user_id = ?
         ORDER BY applications.id DESC
-    """, (
-        user["id"],
-    ))
+        """,
+        (
+            user["id"],
+        )
+    )
 
-    return json_response({
-        "ok": True,
-        "applications": rows_to_list(rows)
-    })
+    return json_response(
+        {
+            "ok": True,
+            "applications": rows_to_list(rows)
+        }
+    )
 
 
 # ============================================================
-# API: PROFILE
+# PROFILE
 # ============================================================
 
-async def api_profile_update(request):
+async def api_profile_update(
+    request
+):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -1154,20 +1207,24 @@ async def api_profile_update(request):
         data = await request.json()
 
         first_name = str(
-            data.get("first_name", "")
+            data.get(
+                "first_name",
+                ""
+            )
         ).strip()
 
         city = str(
-            data.get("city", "")
+            data.get(
+                "city",
+                ""
+            )
         ).strip()
 
         age = int(
-            data.get("age")
+            data.get(
+                "age"
+            )
         )
-
-        username = str(
-            data.get("username", "")
-        ).strip()
 
     except Exception:
 
@@ -1213,25 +1270,32 @@ async def api_profile_update(request):
         user["id"],
         first_name=first_name,
         city=city,
-        age=age,
-        username=username.lstrip("@")
+        age=age
     )
 
-    return json_response({
-        "ok": True,
-        "user": row_to_dict(
-            get_user(user["id"])
-        )
-    })
+    return json_response(
+        {
+            "ok": True,
+            "user": row_to_dict(
+                get_user(
+                    user["id"]
+                )
+            )
+        }
+    )
 
 
 # ============================================================
-# ADMIN AUTH
+# ADMIN CHECK
 # ============================================================
 
-async def admin_check(request):
+async def admin_check(
+    request
+):
 
-    user = await get_miniapp_user(request)
+    user = await get_miniapp_user(
+        request
+    )
 
     if not user:
 
@@ -1243,7 +1307,9 @@ async def admin_check(request):
             401
         )
 
-    if not is_admin(user["id"]):
+    if not is_admin(
+        user["id"]
+    ):
 
         return None, json_response(
             {
@@ -1257,18 +1323,25 @@ async def admin_check(request):
 
 
 # ============================================================
-# ADMIN: STATS
+# ADMIN STATS
 # ============================================================
 
-async def api_admin_stats(request):
+async def api_admin_stats(
+    request
+):
 
-    user, error = await admin_check(request)
+    user, error = await admin_check(
+        request
+    )
 
     if error:
         return error
 
     users = db_fetchone(
-        "SELECT COUNT(*) AS c FROM users"
+        """
+        SELECT COUNT(*) AS c
+        FROM users
+        """
     )["c"]
 
     vacancies = db_fetchone(
@@ -1286,42 +1359,58 @@ async def api_admin_stats(request):
         """
     )["c"]
 
-    return json_response({
-        "ok": True,
-        "stats": {
-            "users": users,
-            "vacancies": vacancies,
-            "applications": applications
+    return json_response(
+        {
+            "ok": True,
+            "stats": {
+                "users": users,
+                "vacancies": vacancies,
+                "applications": applications
+            }
         }
-    })
+    )
 
 
 # ============================================================
-# ADMIN: VACANCIES
+# ADMIN VACANCIES
 # ============================================================
 
-async def api_admin_vacancies(request):
+async def api_admin_vacancies(
+    request
+):
 
-    user, error = await admin_check(request)
+    user, error = await admin_check(
+        request
+    )
 
     if error:
         return error
 
-    rows = db_fetchall("""
+    rows = db_fetchall(
+        """
         SELECT *
         FROM vacancies
         ORDER BY id DESC
-    """)
+        """
+    )
 
-    return json_response({
-        "ok": True,
-        "vacancies": rows_to_list(rows)
-    })
+    return json_response(
+        {
+            "ok": True,
+            "vacancies": rows_to_list(
+                rows
+            )
+        }
+    )
 
 
-async def api_admin_create_vacancy(request):
+async def api_admin_create_vacancy(
+    request
+):
 
-    user, error = await admin_check(request)
+    user, error = await admin_check(
+        request
+    )
 
     if error:
         return error
@@ -1331,27 +1420,59 @@ async def api_admin_create_vacancy(request):
         data = await request.json()
 
         title = str(
-            data.get("title", "")
+            data.get(
+                "title",
+                ""
+            )
         ).strip()
 
         category = str(
-            data.get("category", "")
+            data.get(
+                "category",
+                ""
+            )
         ).strip()
 
         salary = str(
-            data.get("salary", "")
+            data.get(
+                "salary",
+                ""
+            )
+        ).strip()
+
+        city = str(
+            data.get(
+                "city",
+                ""
+            )
         ).strip()
 
         description = str(
-            data.get("description", "")
+            data.get(
+                "description",
+                ""
+            )
         ).strip()
 
         requirements = str(
-            data.get("requirements", "")
+            data.get(
+                "requirements",
+                ""
+            )
         ).strip()
 
         contact = str(
-            data.get("contact", "")
+            data.get(
+                "contact",
+                ""
+            )
+        ).strip()
+
+        image_url = str(
+            data.get(
+                "image_url",
+                ""
+            )
         ).strip()
 
     except Exception:
@@ -1374,7 +1495,8 @@ async def api_admin_create_vacancy(request):
             400
         )
 
-    db_execute("""
+    db_execute(
+        """
         INSERT INTO vacancies (
             title,
             category,
@@ -1382,35 +1504,47 @@ async def api_admin_create_vacancy(request):
             description,
             requirements,
             contact,
+            image_url,
+            city,
             employer_id,
             created_at,
             active
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-    """, (
-        title,
-        category,
-        salary,
-        description,
-        requirements,
-        contact,
-        user["id"],
-        datetime.now().isoformat()
-    ))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """,
+        (
+            title,
+            category,
+            salary,
+            description,
+            requirements,
+            contact,
+            image_url,
+            city,
+            user["id"],
+            datetime.now().isoformat()
+        )
+    )
 
     vacancy_id = db.execute(
         "SELECT last_insert_rowid()"
     ).fetchone()[0]
 
-    return json_response({
-        "ok": True,
-        "vacancy_id": vacancy_id
-    })
+    return json_response(
+        {
+            "ok": True,
+            "vacancy_id": vacancy_id
+        }
+    )
 
 
-async def api_admin_toggle_vacancy(request):
+async def api_admin_toggle_vacancy(
+    request
+):
 
-    user, error = await admin_check(request)
+    user, error = await admin_check(
+        request
+    )
 
     if error:
         return error
@@ -1439,7 +1573,9 @@ async def api_admin_toggle_vacancy(request):
         FROM vacancies
         WHERE id = ?
         """,
-        (vacancy_id,)
+        (
+            vacancy_id,
+        )
     )
 
     if not vacancy:
@@ -1470,15 +1606,23 @@ async def api_admin_toggle_vacancy(request):
         )
     )
 
-    return json_response({
-        "ok": True,
-        "active": bool(new_status)
-    })
+    return json_response(
+        {
+            "ok": True,
+            "active": bool(
+                new_status
+            )
+        }
+    )
 
 
-async def api_admin_delete_vacancy(request):
+async def api_admin_delete_vacancy(
+    request
+):
 
-    user, error = await admin_check(request)
+    user, error = await admin_check(
+        request
+    )
 
     if error:
         return error
@@ -1506,26 +1650,45 @@ async def api_admin_delete_vacancy(request):
         DELETE FROM vacancies
         WHERE id = ?
         """,
-        (vacancy_id,)
+        (
+            vacancy_id,
+        )
     )
 
-    return json_response({
-        "ok": True
-    })
+    db_execute(
+        """
+        DELETE FROM favorites
+        WHERE vacancy_id = ?
+        """,
+        (
+            vacancy_id,
+        )
+    )
+
+    return json_response(
+        {
+            "ok": True
+        }
+    )
 
 
 # ============================================================
-# ADMIN: APPLICATIONS
+# ADMIN APPLICATIONS
 # ============================================================
 
-async def api_admin_applications(request):
+async def api_admin_applications(
+    request
+):
 
-    user, error = await admin_check(request)
+    user, error = await admin_check(
+        request
+    )
 
     if error:
         return error
 
-    rows = db_fetchall("""
+    rows = db_fetchall(
+        """
         SELECT
             applications.*,
             vacancies.title
@@ -1533,13 +1696,18 @@ async def api_admin_applications(request):
         LEFT JOIN vacancies
             ON vacancies.id = applications.vacancy_id
         ORDER BY applications.id DESC
-        LIMIT 100
-    """)
+        LIMIT 200
+        """
+    )
 
-    return json_response({
-        "ok": True,
-        "applications": rows_to_list(rows)
-    })
+    return json_response(
+        {
+            "ok": True,
+            "applications": rows_to_list(
+                rows
+            )
+        }
+    )
 
 
 # ============================================================
@@ -1548,85 +1716,74 @@ async def api_admin_applications(request):
 
 async def health(request):
 
-    return json_response({
-        "ok": True,
-        "service": "work-bot",
-        "mini_app": MINI_APP_URL
-    })
+    return json_response(
+        {
+            "ok": True,
+            "service": "work-bot",
+            "mini_app": MINI_APP_URL
+        }
+    )
 
 
 # ============================================================
-# STATIC WEB
+# STATIC FILES
 # ============================================================
 
 async def index_page(request):
 
-    index_file = WEB_DIR / "index.html"
+    file = WEB_DIR / "index.html"
 
-    if not index_file.exists():
+    if not file.exists():
 
         return web.Response(
-            text=(
-                "ERROR: web/index.html не найден.\n"
-                f"Искали: {index_file}"
-            ),
-            status=500,
-            content_type="text/plain"
+            text="web/index.html не найден",
+            status=500
         )
 
     return web.FileResponse(
-        index_file
+        file
     )
 
 
-async def web_app_js(request):
+async def app_js(request):
 
     file = WEB_DIR / "app.js"
 
     if not file.exists():
 
         return web.Response(
-            text="app.js не найден",
+            text="web/app.js не найден",
             status=404
         )
 
-    return web.FileResponse(file)
+    return web.FileResponse(
+        file
+    )
 
 
-async def web_style_css(request):
+async def style_css(request):
 
     file = WEB_DIR / "style.css"
 
     if not file.exists():
 
         return web.Response(
-            text="style.css не найден",
+            text="web/style.css не найден",
             status=404
         )
 
-    return web.FileResponse(file)
+    return web.FileResponse(
+        file
+    )
 
 
 # ============================================================
-# WEB SERVER
+# WEB APP
 # ============================================================
 
 def create_web_app():
 
     app = web.Application()
-
-    # --------------------------------------------------------
-    # HEALTH
-    # --------------------------------------------------------
-
-    app.router.add_get(
-        "/health",
-        health
-    )
-
-    # --------------------------------------------------------
-    # MINI APP
-    # --------------------------------------------------------
 
     app.router.add_get(
         "/",
@@ -1640,21 +1797,29 @@ def create_web_app():
 
     app.router.add_get(
         "/app.js",
-        web_app_js
+        app_js
     )
 
     app.router.add_get(
         "/style.css",
-        web_style_css
+        style_css
     )
 
-    # --------------------------------------------------------
+    app.router.add_get(
+        "/health",
+        health
+    )
+
     # API
-    # --------------------------------------------------------
 
     app.router.add_get(
         "/api/me",
         api_me
+    )
+
+    app.router.add_get(
+        "/api/categories",
+        api_categories
     )
 
     app.router.add_get(
@@ -1665,11 +1830,6 @@ def create_web_app():
     app.router.add_get(
         "/api/vacancy/{vacancy_id}",
         api_vacancy
-    )
-
-    app.router.add_get(
-        "/api/categories",
-        api_categories
     )
 
     app.router.add_get(
@@ -1697,9 +1857,7 @@ def create_web_app():
         api_profile_update
     )
 
-    # --------------------------------------------------------
-    # ADMIN API
-    # --------------------------------------------------------
+    # ADMIN
 
     app.router.add_get(
         "/api/admin/stats",
@@ -1734,60 +1892,16 @@ def create_web_app():
     return app
 
 
-async def start_web_server():
-
-    app = create_web_app()
-
-    runner = web.AppRunner(
-        app
-    )
-
-    await runner.setup()
-
-    site = web.TCPSite(
-        runner,
-        HOST,
-        PORT
-    )
-
-    await site.start()
-
-    logger.info(
-        "=========================================="
-    )
-
-    logger.info(
-        "WEB SERVER STARTED"
-    )
-
-    logger.info(
-        "PORT: %s",
-        PORT
-    )
-
-    logger.info(
-        "WEB DIR: %s",
-        WEB_DIR
-    )
-
-    logger.info(
-        "MINI APP: %s",
-        MINI_APP_URL
-    )
-
-    logger.info(
-        "=========================================="
-    )
-
-    return runner
-
-
 # ============================================================
-# TELEGRAM /START
+# TELEGRAM START
 # ============================================================
 
-@dp.message(CommandStart())
-async def start_handler(message: Message):
+@dp.message(
+    CommandStart()
+)
+async def start_handler(
+    message: Message
+):
 
     tg_user = message.from_user
 
@@ -1824,11 +1938,11 @@ async def start_handler(message: Message):
     builder.adjust(1)
 
     await message.answer(
-        "👋 <b>Добро пожаловать!</b>\n\n"
-        "💼 Здесь можно искать работу, "
-        "смотреть вакансии и отправлять отклики.\n\n"
-        "Нажмите кнопку ниже, чтобы открыть "
-        "приложение:",
+        "👋 <b>Работа рядом</b>\n\n"
+        "💼 Ищите вакансии\n"
+        "❤️ Сохраняйте понравившиеся\n"
+        "📩 Отправляйте отклики\n\n"
+        "Всё в одном красивом приложении.",
         reply_markup=builder.as_markup()
     )
 
@@ -1844,13 +1958,15 @@ async def vacancies_callback(
     callback: CallbackQuery
 ):
 
-    rows = db_fetchall("""
+    rows = db_fetchall(
+        """
         SELECT *
         FROM vacancies
         WHERE active = 1
         ORDER BY id DESC
         LIMIT 50
-    """)
+        """
+    )
 
     if not rows:
 
@@ -1881,7 +1997,7 @@ async def vacancies_callback(
     builder.adjust(1)
 
     await callback.message.answer(
-        "📋 <b>Последние вакансии:</b>",
+        "📋 <b>Последние вакансии</b>",
         reply_markup=builder.as_markup()
     )
 
@@ -1917,7 +2033,9 @@ async def vacancy_callback(
         WHERE id = ?
         AND active = 1
         """,
-        (vacancy_id,)
+        (
+            vacancy_id,
+        )
     )
 
     if not vacancy:
@@ -1931,10 +2049,12 @@ async def vacancy_callback(
 
     text = (
         f"💼 <b>{vacancy['title']}</b>\n\n"
-        f"📂 <b>Категория:</b> "
+        f"📂 Категория: "
         f"{vacancy['category'] or '—'}\n"
-        f"💰 <b>Зарплата:</b> "
-        f"{vacancy['salary'] or '—'}\n\n"
+        f"💰 Зарплата: "
+        f"{vacancy['salary'] or '—'}\n"
+        f"📍 Город: "
+        f"{vacancy['city'] or '—'}\n\n"
         f"📝 <b>Описание:</b>\n"
         f"{vacancy['description'] or '—'}\n\n"
         f"📌 <b>Требования:</b>\n"
@@ -1972,15 +2092,15 @@ async def admin_callback(
 
     await callback.message.answer(
         "⚙️ <b>Админ-панель</b>\n\n"
-        "Откройте Mini App для полного "
-        "управления вакансиями и откликами."
+        "Откройте Mini App для управления "
+        "вакансиями и откликами."
     )
 
     await callback.answer()
 
 
 # ============================================================
-# TELEGRAM MENU BUTTON
+# MENU BUTTON
 # ============================================================
 
 async def configure_bot():
@@ -1997,7 +2117,7 @@ async def configure_bot():
         )
 
         logger.info(
-            "Telegram menu button configured."
+            "Menu button configured."
         )
 
     except Exception as error:
@@ -2015,7 +2135,7 @@ async def configure_bot():
 async def main():
 
     logger.info(
-        "=========================================="
+        "===================================="
     )
 
     logger.info(
@@ -2023,7 +2143,7 @@ async def main():
     )
 
     logger.info(
-        "MINI APP URL: %s",
+        "MINI APP: %s",
         MINI_APP_URL
     )
 
@@ -2043,17 +2163,35 @@ async def main():
     )
 
     logger.info(
-        "=========================================="
+        "===================================="
     )
 
-    # Удаляем webhook перед polling.
     await bot.delete_webhook(
         drop_pending_updates=True
     )
 
     await configure_bot()
 
-    web_runner = await start_web_server()
+    app = create_web_app()
+
+    runner = web.AppRunner(
+        app
+    )
+
+    await runner.setup()
+
+    site = web.TCPSite(
+        runner,
+        HOST,
+        PORT
+    )
+
+    await site.start()
+
+    logger.info(
+        "WEB SERVER STARTED ON PORT %s",
+        PORT
+    )
 
     try:
 
@@ -2063,7 +2201,7 @@ async def main():
 
     finally:
 
-        await web_runner.cleanup()
+        await runner.cleanup()
 
         await bot.session.close()
 
