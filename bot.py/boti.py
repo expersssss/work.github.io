@@ -4,7 +4,6 @@ import hmac
 import json
 import logging
 import os
-import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -15,14 +14,11 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
     CallbackQuery,
-    ReplyKeyboardRemove,
     MenuButtonWebApp,
     WebAppInfo,
 )
@@ -33,38 +29,39 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # НАСТРОЙКИ
 # ============================================================
 
-TOKEN = os.getenv(
-    "BOT_TOKEN",
-    "8837760493:AAFu40Q7qCphYe_Kh-rBrF2OUZZCuslh1cY"
-)
+TOKEN = os.getenv("8837760493:AAGP0-6E0kisn2HiIZinRaCiNdf7ZjhdD-0", "").strip()
 
 ADMIN_IDS = {
     5662322727,
 }
 
-# ============================================================
-# MINI APP
-# ============================================================
-
-# Для Telegram Mini App URL должен быть HTTPS.
-#
-# Например:
-# MINI_APP_URL = "https://github.com/expersssss/work.github.io.git"
-#
-# Для локального теста понадобится tunnel:
-# ngrok / Cloudflare Tunnel / другой HTTPS tunnel.
-
+# !!! НЕ GITHUB !!!
 MINI_APP_URL = os.getenv(
     "MINI_APP_URL",
-    "https://github.com/expersssss/work.github.io.git"
-)
-
-WEB_DIR = Path(__file__).parent / "web"
+    "https://work-bot-h1go.onrender.com"
+).rstrip("/")
 
 HOST = "0.0.0.0"
-PORT = int(os.getenv("PORT", "8080"))
 
-DB_NAME = "vacancies.db"
+PORT = int(
+    os.getenv("PORT", "10000")
+)
+
+# Папка, где лежит этот файл
+BASE_DIR = Path(__file__).resolve().parent
+
+# Mini App:
+# boti.py
+# web/
+#   index.html
+#   app.js
+#   style.css
+WEB_DIR = BASE_DIR / "web"
+
+DB_NAME = os.getenv(
+    "DB_NAME",
+    str(BASE_DIR / "vacancies.db")
+)
 
 MIN_AGE = 14
 MAX_AGE = 50
@@ -80,6 +77,17 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# ПРОВЕРКА ТОКЕНА
+# ============================================================
+
+if not TOKEN:
+    raise RuntimeError(
+        "Не задан BOT_TOKEN. "
+        "Добавь BOT_TOKEN в Environment Variables Render."
+    )
 
 
 # ============================================================
@@ -111,22 +119,22 @@ db.row_factory = sqlite3.Row
 
 
 def db_execute(query, params=()):
-    cur = db.cursor()
-    cur.execute(query, params)
+    cursor = db.cursor()
+    cursor.execute(query, params)
     db.commit()
-    return cur
+    return cursor
 
 
 def db_fetchone(query, params=()):
-    cur = db.cursor()
-    cur.execute(query, params)
-    return cur.fetchone()
+    cursor = db.cursor()
+    cursor.execute(query, params)
+    return cursor.fetchone()
 
 
 def db_fetchall(query, params=()):
-    cur = db.cursor()
-    cur.execute(query, params)
-    return cur.fetchall()
+    cursor = db.cursor()
+    cursor.execute(query, params)
+    return cursor.fetchall()
 
 
 def column_exists(table_name, column_name):
@@ -134,11 +142,10 @@ def column_exists(table_name, column_name):
         f"PRAGMA table_info({table_name})"
     )
 
-    for row in rows:
-        if row["name"] == column_name:
-            return True
-
-    return False
+    return any(
+        row["name"] == column_name
+        for row in rows
+    )
 
 
 def init_db():
@@ -179,6 +186,11 @@ def init_db():
     if not column_exists("vacancies", "employer_id"):
         db_execute(
             "ALTER TABLE vacancies ADD COLUMN employer_id INTEGER"
+        )
+
+    if not column_exists("vacancies", "active"):
+        db_execute(
+            "ALTER TABLE vacancies ADD COLUMN active INTEGER DEFAULT 1"
         )
 
     db_execute("""
@@ -230,18 +242,17 @@ init_db()
 
 
 # ============================================================
-# USERS
+# USER HELPERS
 # ============================================================
 
-def get_user(tg_id):
-
+def get_user(telegram_id):
     return db_fetchone(
         """
         SELECT *
         FROM users
         WHERE telegram_id = ?
         """,
-        (tg_id,)
+        (telegram_id,)
     )
 
 
@@ -277,7 +288,7 @@ def create_user_from_telegram(
     return get_user(telegram_id)
 
 
-def update_user(tg_id, **kwargs):
+def update_user(telegram_id, **kwargs):
 
     if not kwargs:
         return
@@ -286,10 +297,14 @@ def update_user(tg_id, **kwargs):
     values = []
 
     for key, value in kwargs.items():
-        fields.append(f"{key} = ?")
+
+        fields.append(
+            f"{key} = ?"
+        )
+
         values.append(value)
 
-    values.append(tg_id)
+    values.append(telegram_id)
 
     db_execute(
         f"""
@@ -307,7 +322,7 @@ def update_user(tg_id, **kwargs):
 
 def row_to_dict(row):
 
-    if not row:
+    if row is None:
         return None
 
     return {
@@ -329,12 +344,16 @@ def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 
-def safe_text(value):
+def json_response(data, status=200):
 
-    if value is None:
-        return ""
-
-    return str(value)
+    return web.json_response(
+        data,
+        status=status,
+        dumps=lambda obj: json.dumps(
+            obj,
+            ensure_ascii=False
+        )
+    )
 
 
 # ============================================================
@@ -386,18 +405,18 @@ def validate_telegram_init_data(init_data):
         ):
             return None
 
-        user_data = parsed.get("user")
+        user_json = parsed.get("user")
 
-        if not user_data:
+        if not user_json:
             return None
 
-        return json.loads(user_data)
+        return json.loads(user_json)
 
-    except Exception as e:
+    except Exception as error:
 
-        logger.error(
+        logger.exception(
             "Mini App auth error: %s",
-            e
+            error
         )
 
         return None
@@ -408,6 +427,15 @@ async def get_miniapp_user(request):
     init_data = request.headers.get(
         "X-Telegram-Init-Data"
     )
+
+    # Дополнительная поддержка:
+    # некоторые клиенты могут передавать initData
+    # через query string.
+    if not init_data:
+        init_data = request.query.get(
+            "initData",
+            ""
+        )
 
     user_data = validate_telegram_init_data(
         init_data
@@ -432,23 +460,7 @@ async def get_miniapp_user(request):
 
 
 # ============================================================
-# API RESPONSE
-# ============================================================
-
-def json_response(data, status=200):
-
-    return web.json_response(
-        data,
-        status=status,
-        dumps=lambda x: json.dumps(
-            x,
-            ensure_ascii=False
-        )
-    )
-
-
-# ============================================================
-# MINI APP API
+# API: ME
 # ============================================================
 
 async def api_me(request):
@@ -456,6 +468,7 @@ async def api_me(request):
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
                 "ok": False,
@@ -471,15 +484,67 @@ async def api_me(request):
     return json_response({
         "ok": True,
         "user": row_to_dict(db_user),
-        "is_admin": is_admin(user["id"])
+        "is_admin": is_admin(
+            user["id"]
+        )
     })
 
+
+# ============================================================
+# API: CATEGORIES
+# ============================================================
+
+async def api_categories(request):
+
+    user = await get_miniapp_user(request)
+
+    if not user:
+
+        return json_response(
+            {
+                "ok": False,
+                "error": "Unauthorized"
+            },
+            401
+        )
+
+    rows = db_fetchall("""
+        SELECT
+            category,
+            COUNT(*) AS count
+        FROM vacancies
+        WHERE active = 1
+        AND category IS NOT NULL
+        AND category != ''
+        GROUP BY category
+        ORDER BY count DESC
+    """)
+
+    categories = []
+
+    for row in rows:
+
+        categories.append({
+            "name": row["category"],
+            "count": row["count"]
+        })
+
+    return json_response({
+        "ok": True,
+        "categories": categories
+    })
+
+
+# ============================================================
+# API: VACANCIES
+# ============================================================
 
 async def api_vacancies(request):
 
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
                 "ok": False,
@@ -513,22 +578,24 @@ async def api_vacancies(request):
 
     if search:
 
+        value = f"%{search}%"
+
         query += """
             AND (
                 title LIKE ?
                 OR category LIKE ?
+                OR salary LIKE ?
                 OR description LIKE ?
                 OR requirements LIKE ?
             )
         """
 
-        search_value = f"%{search}%"
-
         params.extend([
-            search_value,
-            search_value,
-            search_value,
-            search_value
+            value,
+            value,
+            value,
+            value,
+            value
         ])
 
     if category:
@@ -539,26 +606,22 @@ async def api_vacancies(request):
 
         params.append(category)
 
-    # В текущей структуре вакансии город не хранится.
-    # Поэтому city используется как дополнительный
-    # поиск по описанию.
-
     if city:
+
+        value = f"%{city}%"
 
         query += """
             AND (
-                description LIKE ?
+                title LIKE ?
+                OR description LIKE ?
                 OR requirements LIKE ?
-                OR title LIKE ?
             )
         """
 
-        city_value = f"%{city}%"
-
         params.extend([
-            city_value,
-            city_value,
-            city_value
+            value,
+            value,
+            value
         ])
 
     query += """
@@ -602,11 +665,16 @@ async def api_vacancies(request):
     })
 
 
+# ============================================================
+# API: SINGLE VACANCY
+# ============================================================
+
 async def api_vacancy(request):
 
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
                 "ok": False,
@@ -616,14 +684,19 @@ async def api_vacancy(request):
         )
 
     try:
+
         vacancy_id = int(
-            request.match_info["vacancy_id"]
+            request.match_info[
+                "vacancy_id"
+            ]
         )
+
     except Exception:
+
         return json_response(
             {
                 "ok": False,
-                "error": "Invalid ID"
+                "error": "Invalid vacancy ID"
             },
             400
         )
@@ -643,7 +716,7 @@ async def api_vacancy(request):
         return json_response(
             {
                 "ok": False,
-                "error": "Vacancy not found"
+                "error": "Вакансия не найдена"
             },
             404
         )
@@ -675,48 +748,20 @@ async def api_vacancy(request):
     })
 
 
-async def api_categories(request):
-
-    user = await get_miniapp_user(request)
-
-    if not user:
-        return json_response(
-            {
-                "ok": False
-            },
-            401
-        )
-
-    rows = db_fetchall("""
-        SELECT category, COUNT(*) AS count
-        FROM vacancies
-        WHERE active = 1
-        AND category IS NOT NULL
-        AND category != ''
-        GROUP BY category
-        ORDER BY count DESC
-    """)
-
-    return json_response({
-        "ok": True,
-        "categories": [
-            {
-                "name": row["category"],
-                "count": row["count"]
-            }
-            for row in rows
-        ]
-    })
-
+# ============================================================
+# API: FAVORITES
+# ============================================================
 
 async def api_favorites(request):
 
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
-                "ok": False
+                "ok": False,
+                "error": "Unauthorized"
             },
             401
         )
@@ -738,6 +783,7 @@ async def api_favorites(request):
     for row in rows:
 
         item = row_to_dict(row)
+
         item["favorite"] = True
 
         result.append(item)
@@ -753,14 +799,17 @@ async def api_favorite_toggle(request):
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
-                "ok": False
+                "ok": False,
+                "error": "Unauthorized"
             },
             401
         )
 
     try:
+
         data = await request.json()
 
         vacancy_id = int(
@@ -772,7 +821,7 @@ async def api_favorite_toggle(request):
         return json_response(
             {
                 "ok": False,
-                "error": "Invalid data"
+                "error": "Некорректные данные"
             },
             400
         )
@@ -792,7 +841,7 @@ async def api_favorite_toggle(request):
         return json_response(
             {
                 "ok": False,
-                "error": "Vacancy not found"
+                "error": "Вакансия не найдена"
             },
             404
         )
@@ -824,7 +873,7 @@ async def api_favorite_toggle(request):
             )
         )
 
-        result = False
+        is_favorite = False
 
     else:
 
@@ -844,16 +893,16 @@ async def api_favorite_toggle(request):
             )
         )
 
-        result = True
+        is_favorite = True
 
     return json_response({
         "ok": True,
-        "favorite": result
+        "favorite": is_favorite
     })
 
 
 # ============================================================
-# APPLICATION FROM MINI APP
+# API: APPLY
 # ============================================================
 
 async def api_apply(request):
@@ -861,6 +910,7 @@ async def api_apply(request):
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
                 "ok": False,
@@ -996,7 +1046,7 @@ async def api_apply(request):
     """, (
         vacancy_id,
         user["id"],
-        db_user["first_name"] or user.get("first_name"),
+        db_user["first_name"] or user.get("first_name") or "—",
         age,
         city,
         contact,
@@ -1008,13 +1058,10 @@ async def api_apply(request):
         "SELECT last_insert_rowid()"
     ).fetchone()[0]
 
-    # Уведомляем администраторов.
-
     admin_text = (
-        "📩 <b>НОВЫЙ ОТКЛИК ИЗ MINI APP</b>\n\n"
+        "📩 <b>НОВЫЙ ОТКЛИК</b>\n\n"
         f"🆔 Отклик: <code>{application_id}</code>\n"
-        f"💼 Вакансия: "
-        f"{vacancy['title']}\n\n"
+        f"💼 Вакансия: <b>{vacancy['title']}</b>\n\n"
         f"👤 Имя: "
         f"{db_user['first_name'] or '—'}\n"
         f"🎂 Возраст: {age}\n"
@@ -1034,11 +1081,11 @@ async def api_apply(request):
                 admin_text
             )
 
-        except Exception as e:
+        except Exception as error:
 
             logger.error(
-                "Application notification: %s",
-                e
+                "Ошибка отправки админу: %s",
+                error
             )
 
     return json_response({
@@ -1048,7 +1095,7 @@ async def api_apply(request):
 
 
 # ============================================================
-# MY APPLICATIONS
+# API: MY APPLICATIONS
 # ============================================================
 
 async def api_my_applications(request):
@@ -1056,9 +1103,11 @@ async def api_my_applications(request):
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
-                "ok": False
+                "ok": False,
+                "error": "Unauthorized"
             },
             401
         )
@@ -1083,7 +1132,7 @@ async def api_my_applications(request):
 
 
 # ============================================================
-# UPDATE PROFILE
+# API: PROFILE
 # ============================================================
 
 async def api_profile_update(request):
@@ -1091,9 +1140,11 @@ async def api_profile_update(request):
     user = await get_miniapp_user(request)
 
     if not user:
+
         return json_response(
             {
-                "ok": False
+                "ok": False,
+                "error": "Unauthorized"
             },
             401
         )
@@ -1175,7 +1226,7 @@ async def api_profile_update(request):
 
 
 # ============================================================
-# ADMIN API
+# ADMIN AUTH
 # ============================================================
 
 async def admin_check(request):
@@ -1183,6 +1234,7 @@ async def admin_check(request):
     user = await get_miniapp_user(request)
 
     if not user:
+
         return None, json_response(
             {
                 "ok": False,
@@ -1203,6 +1255,10 @@ async def admin_check(request):
 
     return user, None
 
+
+# ============================================================
+# ADMIN: STATS
+# ============================================================
 
 async def api_admin_stats(request):
 
@@ -1239,6 +1295,10 @@ async def api_admin_stats(request):
         }
     })
 
+
+# ============================================================
+# ADMIN: VACANCIES
+# ============================================================
 
 async def api_admin_vacancies(request):
 
@@ -1309,7 +1369,7 @@ async def api_admin_create_vacancy(request):
         return json_response(
             {
                 "ok": False,
-                "error": "Введите название"
+                "error": "Введите название вакансии"
             },
             400
         )
@@ -1358,7 +1418,9 @@ async def api_admin_toggle_vacancy(request):
     try:
 
         vacancy_id = int(
-            request.match_info["vacancy_id"]
+            request.match_info[
+                "vacancy_id"
+            ]
         )
 
     except Exception:
@@ -1385,12 +1447,16 @@ async def api_admin_toggle_vacancy(request):
         return json_response(
             {
                 "ok": False,
-                "error": "Не найдено"
+                "error": "Вакансия не найдена"
             },
             404
         )
 
-    new_status = 0 if vacancy["active"] else 1
+    new_status = (
+        0
+        if vacancy["active"]
+        else 1
+    )
 
     db_execute(
         """
@@ -1420,14 +1486,17 @@ async def api_admin_delete_vacancy(request):
     try:
 
         vacancy_id = int(
-            request.match_info["vacancy_id"]
+            request.match_info[
+                "vacancy_id"
+            ]
         )
 
     except Exception:
 
         return json_response(
             {
-                "ok": False
+                "ok": False,
+                "error": "Invalid ID"
             },
             400
         )
@@ -1444,6 +1513,10 @@ async def api_admin_delete_vacancy(request):
         "ok": True
     })
 
+
+# ============================================================
+# ADMIN: APPLICATIONS
+# ============================================================
 
 async def api_admin_applications(request):
 
@@ -1470,22 +1543,115 @@ async def api_admin_applications(request):
 
 
 # ============================================================
-# MINI APP SERVER
+# HEALTH
 # ============================================================
 
 async def health(request):
 
     return json_response({
         "ok": True,
-        "service": "telegram-mini-app"
+        "service": "work-bot",
+        "mini_app": MINI_APP_URL
     })
 
+
+# ============================================================
+# STATIC WEB
+# ============================================================
+
+async def index_page(request):
+
+    index_file = WEB_DIR / "index.html"
+
+    if not index_file.exists():
+
+        return web.Response(
+            text=(
+                "ERROR: web/index.html не найден.\n"
+                f"Искали: {index_file}"
+            ),
+            status=500,
+            content_type="text/plain"
+        )
+
+    return web.FileResponse(
+        index_file
+    )
+
+
+async def web_app_js(request):
+
+    file = WEB_DIR / "app.js"
+
+    if not file.exists():
+
+        return web.Response(
+            text="app.js не найден",
+            status=404
+        )
+
+    return web.FileResponse(file)
+
+
+async def web_style_css(request):
+
+    file = WEB_DIR / "style.css"
+
+    if not file.exists():
+
+        return web.Response(
+            text="style.css не найден",
+            status=404
+        )
+
+    return web.FileResponse(file)
+
+
+# ============================================================
+# WEB SERVER
+# ============================================================
 
 def create_web_app():
 
     app = web.Application()
 
+    # --------------------------------------------------------
+    # HEALTH
+    # --------------------------------------------------------
+
+    app.router.add_get(
+        "/health",
+        health
+    )
+
+    # --------------------------------------------------------
+    # MINI APP
+    # --------------------------------------------------------
+
+    app.router.add_get(
+        "/",
+        index_page
+    )
+
+    app.router.add_get(
+        "/index.html",
+        index_page
+    )
+
+    app.router.add_get(
+        "/app.js",
+        web_app_js
+    )
+
+    app.router.add_get(
+        "/style.css",
+        web_style_css
+    )
+
+    # --------------------------------------------------------
     # API
+    # --------------------------------------------------------
+
     app.router.add_get(
         "/api/me",
         api_me
@@ -1531,7 +1697,10 @@ def create_web_app():
         api_profile_update
     )
 
-    # ADMIN
+    # --------------------------------------------------------
+    # ADMIN API
+    # --------------------------------------------------------
+
     app.router.add_get(
         "/api/admin/stats",
         api_admin_stats
@@ -1562,33 +1731,6 @@ def create_web_app():
         api_admin_applications
     )
 
-    app.router.add_get(
-        "/health",
-        health
-    )
-
-    # STATIC
-    if WEB_DIR.exists():
-
-        app.router.add_static(
-            "/",
-            WEB_DIR,
-            show_index=True
-        )
-
-    else:
-
-        async def no_web(request):
-
-            return web.Response(
-                text="Папка web не найдена."
-            )
-
-        app.router.add_get(
-            "/",
-            no_web
-        )
-
     return app
 
 
@@ -1611,41 +1753,59 @@ async def start_web_server():
     await site.start()
 
     logger.info(
-        "Mini App server started on %s:%s",
-        HOST,
+        "=========================================="
+    )
+
+    logger.info(
+        "WEB SERVER STARTED"
+    )
+
+    logger.info(
+        "PORT: %s",
         PORT
+    )
+
+    logger.info(
+        "WEB DIR: %s",
+        WEB_DIR
+    )
+
+    logger.info(
+        "MINI APP: %s",
+        MINI_APP_URL
+    )
+
+    logger.info(
+        "=========================================="
     )
 
     return runner
 
 
 # ============================================================
-# TELEGRAM BOT
+# TELEGRAM /START
 # ============================================================
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
 
-    user = create_user_from_telegram(
-        message.from_user.id,
-        message.from_user.username,
-        message.from_user.first_name,
-        message.from_user.last_name
+    tg_user = message.from_user
+
+    create_user_from_telegram(
+        tg_user.id,
+        tg_user.username,
+        tg_user.first_name,
+        tg_user.last_name
     )
 
     builder = InlineKeyboardBuilder()
 
-    if (
-        MINI_APP_URL
-        and "YOUR-DOMAIN" not in MINI_APP_URL
-    ):
-
-        builder.button(
-            text="🚀 Открыть приложение",
-            web_app=WebAppInfo(
-                url=MINI_APP_URL
-            )
+    builder.button(
+        text="🚀 Открыть приложение",
+        web_app=WebAppInfo(
+            url=MINI_APP_URL
         )
+    )
 
     builder.button(
         text="📋 Вакансии",
@@ -1653,7 +1813,7 @@ async def start_handler(message: Message):
     )
 
     if is_admin(
-        message.from_user.id
+        tg_user.id
     ):
 
         builder.button(
@@ -1665,13 +1825,17 @@ async def start_handler(message: Message):
 
     await message.answer(
         "👋 <b>Добро пожаловать!</b>\n\n"
-        "Здесь можно искать работу, "
+        "💼 Здесь можно искать работу, "
         "смотреть вакансии и отправлять отклики.\n\n"
-        "🚀 Для полноценного интерфейса "
-        "откройте Mini App:",
+        "Нажмите кнопку ниже, чтобы открыть "
+        "приложение:",
         reply_markup=builder.as_markup()
     )
 
+
+# ============================================================
+# TELEGRAM VACANCIES
+# ============================================================
 
 @dp.callback_query(
     F.data == "vacancies"
@@ -1702,14 +1866,15 @@ async def vacancies_callback(
 
     for vacancy in rows:
 
+        title = (
+            vacancy["title"]
+            or "Вакансия"
+        )
+
         builder.button(
-            text=(
-                f"💼 "
-                f"{vacancy['title'][:45]}"
-            ),
+            text=f"💼 {title[:45]}",
             callback_data=(
-                f"vacancy:"
-                f"{vacancy['id']}"
+                f"vacancy:{vacancy['id']}"
             )
         )
 
@@ -1766,10 +1931,14 @@ async def vacancy_callback(
 
     text = (
         f"💼 <b>{vacancy['title']}</b>\n\n"
-        f"📂 {vacancy['category'] or 'Без категории'}\n"
-        f"💰 {vacancy['salary'] or 'Не указана'}\n\n"
-        f"📝 {vacancy['description'] or '—'}\n\n"
-        f"📌 {vacancy['requirements'] or 'Без требований'}"
+        f"📂 <b>Категория:</b> "
+        f"{vacancy['category'] or '—'}\n"
+        f"💰 <b>Зарплата:</b> "
+        f"{vacancy['salary'] or '—'}\n\n"
+        f"📝 <b>Описание:</b>\n"
+        f"{vacancy['description'] or '—'}\n\n"
+        f"📌 <b>Требования:</b>\n"
+        f"{vacancy['requirements'] or '—'}"
     )
 
     await callback.message.answer(
@@ -1778,6 +1947,10 @@ async def vacancy_callback(
 
     await callback.answer()
 
+
+# ============================================================
+# TELEGRAM ADMIN
+# ============================================================
 
 @dp.callback_query(
     F.data == "admin"
@@ -1799,45 +1972,40 @@ async def admin_callback(
 
     await callback.message.answer(
         "⚙️ <b>Админ-панель</b>\n\n"
-        "Для полного управления "
-        "используйте Mini App."
+        "Откройте Mini App для полного "
+        "управления вакансиями и откликами."
     )
 
     await callback.answer()
 
 
 # ============================================================
-# BOT MENU BUTTON
+# TELEGRAM MENU BUTTON
 # ============================================================
 
 async def configure_bot():
 
-    if (
-        MINI_APP_URL
-        and "YOUR-DOMAIN" not in MINI_APP_URL
-    ):
+    try:
 
-        try:
-
-            await bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(
-                    text="💼 Работа",
-                    web_app=WebAppInfo(
-                        url=MINI_APP_URL
-                    )
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="💼 Работа",
+                web_app=WebAppInfo(
+                    url=MINI_APP_URL
                 )
             )
+        )
 
-            logger.info(
-                "Telegram Mini App menu button configured."
-            )
+        logger.info(
+            "Telegram menu button configured."
+        )
 
-        except Exception as e:
+    except Exception as error:
 
-            logger.error(
-                "Menu button error: %s",
-                e
-            )
+        logger.error(
+            "Menu button error: %s",
+            error
+        )
 
 
 # ============================================================
@@ -1846,22 +2014,39 @@ async def configure_bot():
 
 async def main():
 
-    if TOKEN == "ВСТАВЬ_СЮДА_ТОКЕН_БОТА":
-
-        raise RuntimeError(
-            "Укажи TOKEN в boti.py "
-            "или переменную окружения BOT_TOKEN."
-        )
-
     logger.info(
-        "Бот запускается..."
+        "=========================================="
     )
 
     logger.info(
-        "Администраторы: %s",
+        "STARTING WORK BOT"
+    )
+
+    logger.info(
+        "MINI APP URL: %s",
+        MINI_APP_URL
+    )
+
+    logger.info(
+        "WEB DIR: %s",
+        WEB_DIR
+    )
+
+    logger.info(
+        "DATABASE: %s",
+        DB_NAME
+    )
+
+    logger.info(
+        "ADMINS: %s",
         ADMIN_IDS
     )
 
+    logger.info(
+        "=========================================="
+    )
+
+    # Удаляем webhook перед polling.
     await bot.delete_webhook(
         drop_pending_updates=True
     )
@@ -1885,6 +2070,10 @@ async def main():
         db.close()
 
 
+# ============================================================
+# RUN
+# ============================================================
+
 if __name__ == "__main__":
 
     try:
@@ -1897,4 +2086,11 @@ if __name__ == "__main__":
 
         logger.info(
             "Бот остановлен."
+        )
+
+    except Exception as error:
+
+        logger.exception(
+            "КРИТИЧЕСКАЯ ОШИБКА: %s",
+            error
         )
