@@ -29,7 +29,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # НАСТРОЙКИ
 # ============================================================
 
-TOKEN = os.getenv("8837760493:AAGP0-6E0kisn2HiIZinRaCiNdf7ZjhdD-0", "").strip()
+TOKEN = os.getenv("BOT_TOKEN")
 
 ADMIN_IDS = {
     5662322727,
